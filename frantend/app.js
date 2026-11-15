@@ -253,7 +253,8 @@ function addAssistantResult(data) {
 
   const bubble = el("div", "bubble");
   const meta = el("div", "meta");
-  meta.append(badge(data.ok ? "completed" : "stopped", data.ok ? "ok" : "warn"));
+  const clarification = data.stopped_because === "clarification_required";
+  meta.append(badge(clarification ? "needs clarification" : data.ok ? "completed" : "stopped", clarification || !data.ok ? "warn" : "ok"));
   meta.append(badge(data.mode === "llm" ? "llm planner" : "fallback"));
 
   const outcome = String(data.outcome || "(no outcome returned)");
