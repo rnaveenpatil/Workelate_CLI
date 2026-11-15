@@ -116,7 +116,7 @@ def next_action(
     )
     if extra_hint:
         user += f"\n\nIMPORTANT: {extra_hint}"
-    user += "\n\nChoose the appropriate response or the single next action. Return the required JSON object."
+    user += "\n\nIf answering conversationally, reply naturally in plain text. If taking a workspace action, return one valid JSON action object."
     messages.append({"role": "user", "content": user})
 
     raw = llm.chat(messages, temperature=PLANNER_TEMPERATURE)
