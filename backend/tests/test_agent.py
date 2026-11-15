@@ -233,42 +233,56 @@ def test_agent_fallback_reports_failed_command(monkeypatch):
     assert result.stopped_because == "fallback_command_failed"
 
 
-# ------------------------------ remote terminal -----------------------------
+# ------------------------------ Daytona sandbox -----------------------------
 
 
-def test_remote_headers_carry_both_tokens(monkeypatch):
-    monkeypatch.setenv("CLI_TOKEN", "shared")
-    monkeypatch.setenv("CLI_GITHUB_TOKEN", "ghu_test")
-    assert cli._headers() == {"X-CLI-Token": "shared", "X-Github-Token": "ghu_test"}
+class _FakeProcess:
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def exec(self, command, cwd=None, timeout=None):
+        self.calls.append((command, cwd, timeout))
+        return type("Resp", (), {"result": "daytona-ok\n", "exit_code": 0})()
 
 
-def test_sandbox_wraps_remote_commands(monkeypatch):
-    captured: dict = {}
+class _FakeSandbox:
+    state = "SandboxState.STARTED"
 
-    def fake_remote(command, cwd=None, timeout=120):
-        captured.update(command=command, cwd=cwd, timeout=timeout)
-        return {"ok": True, "exit_code": 0, "stdout": "hi", "stderr": ""}
+    def __init__(self):
+        self.process = _FakeProcess()
 
-    monkeypatch.setenv("CLI_MODE", "remote")
-    monkeypatch.setenv("SANDBOX_CONTAINER", "agent-sandbox")
-    monkeypatch.setenv("SANDBOX_WORKDIR", "/workspace")
-    monkeypatch.setenv("SANDBOX_USER", "1000:1000")
-    monkeypatch.setattr(cli, "run_remote", fake_remote)
 
-    result = cli.run("echo hi && ls", cwd="/workspaces/Workelate_CLI")
+def test_daytona_run_dispatches_to_sandbox(monkeypatch):
+    sandbox = _FakeSandbox()
+    monkeypatch.setenv("CLI_MODE", "daytona")
+    monkeypatch.setenv("DAYTONA_API_KEY", "test-key")
+    monkeypatch.setenv("DAYTONA_SANDBOX_ID", "raw-terml-test")
+    monkeypatch.setenv("DAYTONA_WORKDIR", "/home/daytona")
+    monkeypatch.setattr(cli, "_daytona_sandbox", lambda: sandbox)
+
+    result = cli.run("echo hi")
     assert result["ok"] is True
-    assert "docker exec" in captured["command"]
-    assert "agent-sandbox" in captured["command"]
-    assert "--user 1000:1000" in captured["command"]
-    assert "echo hi" in captured["command"]
-    assert captured["cwd"] is None
+    assert result["stdout"].strip() == "daytona-ok"
+    assert sandbox.process.calls == [("echo hi", "/home/daytona", 120)]
+
+
+def test_daytona_status_reports_config(monkeypatch):
+    monkeypatch.setenv("CLI_MODE", "daytona")
+    monkeypatch.setenv("DAYTONA_API_KEY", "test-key")
+    monkeypatch.setenv("DAYTONA_SANDBOX_ID", "raw-terml-test")
+    status = cli.status()
+    assert status["mode"] == "daytona"
+    assert status["configured"] is True
+    assert status["daytona"]["api_key_set"] is True
+    assert status["daytona"]["sandbox_id"] == "raw-terml-test"
 
 
 def test_executor_routes_file_tools_to_remote(monkeypatch):
     calls: list[tuple] = []
     ok = {"ok": True, "stdout": "x", "stderr": "", "exit_code": 0}
 
-    monkeypatch.setenv("CLI_MODE", "remote")
+    monkeypatch.setenv("CLI_MODE", "daytona")
+    monkeypatch.setenv("DAYTONA_API_KEY", "test-key")
     monkeypatch.setattr(cli, "read_file_remote", lambda p: calls.append(("read", p)) or ok)
     monkeypatch.setattr(
         cli, "write_file_remote", lambda p, c: calls.append(("write", p, c)) or ok
@@ -282,30 +296,11 @@ def test_executor_routes_file_tools_to_remote(monkeypatch):
 
 
 def test_workspace_files_uses_remote_listing(monkeypatch):
-    monkeypatch.setenv("CLI_MODE", "remote")
+    monkeypatch.setenv("CLI_MODE", "daytona")
+    monkeypatch.setenv("DAYTONA_API_KEY", "test-key")
     monkeypatch.setattr(
         cli,
         "list_files_remote",
         lambda prefix="": {"ok": True, "stdout": "a.txt\nb.txt", "stderr": "", "exit_code": 0},
     )
     assert executor.workspace_files() == ["a.txt", "b.txt"]
-
-
-def test_remote_private_port_returns_actionable_error(monkeypatch):
-    class FakeResponse:
-        status_code = 401
-        is_redirect = False
-        headers = {"www-authenticate": "tunnel"}
-        text = ""
-
-        def json(self):
-            return {}
-
-    monkeypatch.setenv("CLI_REMOTE_URL", "https://example-8000.app.github.dev")
-    monkeypatch.setenv("CLI_GITHUB_TOKEN", "")
-    monkeypatch.setattr(cli.httpx, "post", lambda *a, **k: FakeResponse())
-
-    result = cli.run_remote("echo hi")
-    assert result["ok"] is False
-    assert "CLI_GITHUB_TOKEN" in result["stderr"]
-    assert "private" in result["stderr"].lower()

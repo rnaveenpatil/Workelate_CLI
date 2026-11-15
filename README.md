@@ -4,7 +4,6 @@ Minimal agent: **goal in → shell/file actions on the workspace → outcome out
 
 ```
 frantend/            static UI (optional)
-cli_server.py        remote terminal server (run INSIDE the GitHub workspace/codespace)
 backend/
   app/main.py        FastAPI entrypoint
   app/routes.py      /health  /files  /task
@@ -12,7 +11,7 @@ backend/
   app/agent.py       the loop: plan -> execute -> observe
   app/planner.py     picks next action (LLM if key set, else 1-step command)
   app/executor.py    tools: run_command, read_file, write_file, list_files, http_request, fetch_web
-  app/cli.py         the terminal: local subprocess OR remote HTTP
+  app/cli.py         the terminal: local subprocess OR Daytona sandbox
   app/crawler.py     read-only GitHub file listing (optional)
   app/inspector.py   shrinks tool output for the next step
   app/llm.py         OpenAI-compatible client — API KEY LEFT EMPTY ON PURPOSE
@@ -33,64 +32,24 @@ curl -X POST localhost:8000/task -H 'content-type: application/json' \
      -d '{"goal":"ls && git status","max_steps":3}'
 ```
 
-## Connect the GitHub workspace terminal
+## Connect a Daytona sandbox
 
-Inside the codespace whose terminal the agent should use:
-
-```bash
-pip install fastapi uvicorn
-CLI_TOKEN=change-me uvicorn cli_server:app --host 0.0.0.0 --port 8000
-```
-
-Then in `backend/.env`:
+Install the SDK (already in `requirements.txt`) and set in `backend/.env`:
 
 ```
-CLI_MODE=remote
-CLI_REMOTE_URL=https://<codespace>-8000.app.github.dev
-CLI_TOKEN=change-me
+CLI_MODE=daytona
+DAYTONA_API_KEY=<project api key>
+DAYTONA_API_URL=https://app.daytona.io/api
+DAYTONA_SANDBOX_ID=raw-terml-test   # optional; empty = reuse a running one
+DAYTONA_WORKDIR=/home/daytona
 ```
 
-Codespaces ports are **private** by default, so a plain HTTP client gets a 302 to
-`pf-signin`. Either make port 8000 public in the Codespaces **Ports** tab, or copy
-the codespace's own `$GITHUB_TOKEN` (starts with `ghu_`) and set:
+Every `run_command`, `read_file`, `write_file`, and `list_files` then runs inside
+that Daytona sandbox. When `DAYTONA_SANDBOX_ID` is empty the backend reuses a
+running sandbox or creates a new one.
 
-```
-CLI_GITHUB_TOKEN=<ghu_...>
-```
-
-The client sends it as `X-Github-Token`, which is what GitHub's tunnel expects for
-private forwarded ports.
-
-### Isolate tasks in a Docker sandbox
-
-With a container already running in the workspace (e.g. `agent-sandbox` with
-`/workspace` bind-mounted), set in `backend/.env`:
-
-```
-SANDBOX_CONTAINER=agent-sandbox
-SANDBOX_WORKDIR=/workspace
-SANDBOX_USER=1000:1000      # rootless Docker bind-mount owner
-```
-
-Every remote `run_command`, `read_file`, `write_file`, and `list_files` is then
-wrapped in `docker exec`, so the agent only touches the container's `/workspace`
-and cannot modify the codespace checkout.
-
-The sandbox image is `workelate-sandbox:latest` (git, node/npm, curl, jq,
-ripgrep, gcc, python). It is started hardened, with a read-only rootfs and no
-capabilities, so runtime installs happen in `/workspace`:
-
-```bash
-docker run -d --name agent-sandbox \
-  --read-only --cap-drop ALL --security-opt no-new-privileges \
-  --tmpfs /tmp:rw,noexec,nosuid,size=256m --network bridge \
-  --memory 2g --cpus 2 --pids-limit 100 \
-  --mount type=bind,source=/home/codespace/agent-sandboxes/task-001,target=/workspace \
-  --workdir /workspace workelate-sandbox:latest sleep infinity
-```
-
-With no remote set, `CLI_MODE=local` runs commands in `WORKSPACE_DIR` on the same
-machine — the agent still works.
+With `CLI_MODE=local`, commands run in `WORKSPACE_DIR` on the same machine
+instead — the agent still works offline.
 
 ## LLM
 

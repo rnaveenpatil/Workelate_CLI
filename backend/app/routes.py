@@ -34,7 +34,7 @@ def files(prefix: str = "") -> dict:
     listing = executor.workspace_files()
     if prefix:
         listing = [p for p in listing if p.startswith(prefix)]
-    return {"source": "remote" if cli.mode() == "remote" else "local", "files": listing}
+    return {"source": "remote" if cli.uses_remote() else "local", "files": listing}
 
 
 @router.post("/task", response_model=TaskResult)

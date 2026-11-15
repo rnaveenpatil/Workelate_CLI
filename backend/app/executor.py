@@ -75,7 +75,7 @@ def execute(action: dict) -> dict:
         )
 
     if tool == "read_file":
-        if cli.mode() == "remote":
+        if cli.uses_remote():
             return cli.read_file_remote(action.get("path", ""))
         try:
             with open(
@@ -86,7 +86,7 @@ def execute(action: dict) -> dict:
             return {"ok": False, "stdout": "", "stderr": str(exc), "exit_code": -1}
 
     if tool == "write_file":
-        if cli.mode() == "remote":
+        if cli.uses_remote():
             return cli.write_file_remote(action.get("path", ""), action.get("content", ""))
         try:
             full = _safe_path(action.get("path", ""))
@@ -107,7 +107,7 @@ def execute(action: dict) -> dict:
 
     if tool == "list_files":
         prefix = str(action.get("prefix", "") or "")
-        if cli.mode() == "remote":
+        if cli.uses_remote():
             return cli.list_files_remote(prefix)
         try:
             files = _local_listing(prefix=prefix)
@@ -140,7 +140,7 @@ def execute(action: dict) -> dict:
 
 def workspace_files() -> list[str]:
     """Grounding list: the remote sandbox when remote, else the local workspace."""
-    if cli.mode() == "remote":
+    if cli.uses_remote():
         result = cli.list_files_remote()
         if result.get("ok"):
             return [p for p in (result.get("stdout") or "").splitlines() if p.strip()]
