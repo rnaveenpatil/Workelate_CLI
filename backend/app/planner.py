@@ -11,7 +11,7 @@ import re
 
 from . import llm
 
-WORKSPACE_TOOLS = ("run_command",)
+WORKSPACE_TOOLS = ("run_command", "read_file", "write_file", "list_files")
 TOOLS = (*WORKSPACE_TOOLS, "respond", "clarify", "done")
 
 ALIASES = {
@@ -23,6 +23,9 @@ ALIASES = {
 
 SPEC = {
     "run_command": ("command",),
+    "read_file": ("path",),
+    "write_file": ("path", "content"),
+    "list_files": (),
     "respond": ("response",),
     "clarify": ("question",),
     "done": ("outcome",),
@@ -39,8 +42,8 @@ conversation history. Decide what response is appropriate:
    naturally and directly. Do not inspect the workspace or run commands.
 2. If an essential detail is missing and guessing would materially risk the
    result, use "clarify" and ask one focused question.
-3. If the user requests an operation on their workspace, use "run_command".
-   Actually perform the work; do not merely describe commands the user could run.
+3. If the user requests an operation on their workspace, use the appropriate
+   workspace tool. Actually perform the work; do not merely describe commands.
 4. After workspace actions, use more run_command actions as needed. Use "done"
    only when finished or genuinely blocked. Its outcome must explain the result
    in plain language, grounded in the execution observations.
@@ -51,15 +54,19 @@ INTERNAL RESPONSE ACTIONS
 {"tool":"respond","response":"A natural answer to the user's message"}
 {"tool":"clarify","question":"One necessary clarification"}
 
-WORKSPACE ACTION
+WORKSPACE ACTIONS
 {"tool":"run_command","command":"<shell command>","cwd":"<optional workspace-relative directory>","timeout":120,"thought":"Short reason"}
+{"tool":"read_file","path":"<workspace-relative file path>","thought":"Short reason"}
+{"tool":"write_file","path":"<workspace-relative file path>","content":"<complete file content>","thought":"Short reason"}
+{"tool":"list_files","prefix":"<optional path prefix>","thought":"Short reason"}
 
 FINISH AFTER WORKSPACE ACTIONS
 {"tool":"done","outcome":"Concise, user-facing result based on the execution evidence","thought":"Why the task is finished"}
 
 Rules:
-- The only workspace tool is run_command. Use it for file reading/writing,
-  listings, git, tests, package commands, and other terminal work.
+- Use run_command for shell, git, tests, and package commands. Use read_file,
+  write_file, and list_files for direct workspace file operations. Keep all
+  file paths inside the workspace.
 - Choose actions based on meaning and context, not keyword matching.
 - Never run a command just to answer a general question or greeting.
 - Use prior user/assistant messages to resolve references such as "that", "it",
