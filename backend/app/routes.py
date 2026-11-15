@@ -22,7 +22,7 @@ def health() -> dict:
 @router.get("/tools")
 def tools() -> dict:
     """The tool surface the planner may choose from."""
-    return {"tools": list(planner.TOOLS), "executor_tools": list(executor.TOOLS)}
+    return {"tools": list(executor.TOOLS)}
 
 
 @router.get("/files")
