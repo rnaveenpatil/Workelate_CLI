@@ -11,7 +11,7 @@ backend/
   app/schemas.py     request/response models
   app/agent.py       the loop plus final user-facing summarisation
   app/planner.py     picks the next action using the configured LLM
-  app/executor.py    tools: run_command, read_file, write_file, list_files
+  app/executor.py    the single model tool: run_command
   app/cli.py         the terminal: local subprocess OR Modal sandbox
   app/inspector.py   shrinks tool output for the next step
   app/llm.py         OpenAI-compatible client — API KEY LEFT EMPTY ON PURPOSE
@@ -43,7 +43,7 @@ The chat UI is served by the same backend at **http://localhost:8000/ui/**.
 
 It sends each message to `POST /task`, shows a concise user-facing summary, and keeps
 the actual commands, inputs, and raw terminal observations in the expandable execution log.
-The model independently decides whether to answer directly, ask one necessary clarification, or use workspace tools. This decision is semantic and model-driven; there is no keyword-based intent classifier. Direct answers do not trigger terminal access or an extra summary call. For workspace tasks, the final report explains what the agent understood, what it actually changed or checked, the evidence, and any blockers. The final summary is generated from the execution trace; if synthesis fails, a deterministic report is used instead. It can also be opened directly from
+The model independently decides whether to answer directly, ask one necessary clarification, or use the single `run_command` tool for workspace work. File operations are terminal commands, not separate model tools. This decision is semantic and model-driven; there is no keyword-based intent classifier. Direct answers do not trigger terminal access or an extra summary call. For workspace tasks, the final report explains what the agent understood, what it actually changed or checked, the evidence, and any blockers. The final summary is generated from the execution trace; if synthesis fails, a deterministic report is used instead. It can also be opened directly from
 `frantend/index.html`; in that case it calls `http://localhost:8000` by default.
 Override the API URL with `?api=http://127.0.0.1:8000` or the **API** button.
 
@@ -77,8 +77,8 @@ MODAL_IDLE_TIMEOUT=
 MODAL_WORKDIR=
 ```
 
-Every `run_command`, `read_file`, `write_file`, and `list_files` then runs inside
-that Modal sandbox. The sandbox is cached per process and recreated automatically
+The single `run_command` tool runs inside that Modal sandbox. File reads, edits,
+directory listings, tests, and web requests are performed through terminal commands. The sandbox is cached per process and recreated automatically
 when it terminates. `MODAL_IMAGE` also accepts the dashboard URL
 `https://modal.com/images/rnpvip685/main`; the workspace segment is dropped.
 Modal sandboxes have outbound internet access, so use `curl`/`wget` through
