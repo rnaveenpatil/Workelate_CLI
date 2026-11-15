@@ -290,16 +290,10 @@ function addAssistantResult(data) {
     bubble.append(el("div", "stop-reason", `stopped: ${data.stopped_because}`));
   }
 
-  // Keep the complete backend trace visible. Do not discard the final
-  // "done" entry: the execution log should match the API response exactly.
-  const steps = Array.isArray(data.steps) ? data.steps.filter(Boolean) : [];
-  const executed = steps.filter((step) => step.tool !== "done");
-
-  if (executed.length) {
-    bubble.append(el("pre", "command-preview", executed.map(actionLabel).join("\n")));
-  }
-  if (steps.length) {
-    bubble.append(buildSteps(steps, true));
+  // The expandable execution panel contains every action and its terminal
+  // observation, matching the original frontend behavior.
+  if (Array.isArray(data.steps) && data.steps.length) {
+    bubble.append(buildSteps(data.steps, !data.ok));
   }
 
   wrap.append(bubble);
