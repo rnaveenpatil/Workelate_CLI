@@ -1,44 +1,234 @@
-"""Decides the next action. One LLM call per step; tiny rule fallback if no key.
+"""Decides the next action: one LLM call per step, with a small rule fallback.
 
-LLM must reply with JSON:
-    {"tool": "run_command" | "read_file" | "write_file" | "done",
-     "command" | "path" | "content": "...",
-     "thought": "one short line"}
+The planner always returns a *normalized* action dict:
+
+    {"tool": "<name>", ...arguments..., "thought": "<short>"}
+
+so the executor can trust the shape even when the model is sloppy (fenced JSON,
+aliases like "shell"/"read", extra prose around the object).
 """
+
+import json
+import os
+import re
 
 from . import crawler, llm
 
-SYSTEM = """You are Workelate_CLI, an agent with a shell tool on the user's workspace.
-Tools:
-  run_command -> {"tool":"run_command","command":"<shell>","thought":"..."}
-  read_file   -> {"tool":"read_file","path":"<rel path>","thought":"..."}
-  write_file  -> {"tool":"write_file","path":"<rel path>","content":"<text>","thought":"..."}
-  done        -> {"tool":"done","outcome":"<final answer for the user>"}
+TOOLS = (
+    "run_command",
+    "read_file",
+    "write_file",
+    "list_files",
+    "http_request",
+    "fetch_web",
+    "done",
+)
 
-Rules: one action per reply. Prefer few steps. Inspect before you change.
-Reply with JSON only."""
+# Tolerate common model shorthand.
+ALIASES = {
+    "shell": "run_command",
+    "bash": "run_command",
+    "command": "run_command",
+    "exec": "run_command",
+    "execute": "run_command",
+    "terminal": "run_command",
+    "read": "read_file",
+    "cat": "read_file",
+    "readfile": "read_file",
+    "read_file_lines": "read_file",
+    "write": "write_file",
+    "create_file": "write_file",
+    "save_file": "write_file",
+    "edit_file": "write_file",
+    "ls": "list_files",
+    "list": "list_files",
+    "listfiles": "list_files",
+    "list_files_in_workspace": "list_files",
+    "http": "http_request",
+    "request": "http_request",
+    "curl": "http_request",
+    "api_call": "http_request",
+    "fetch": "fetch_web",
+    "web": "fetch_web",
+    "browse": "fetch_web",
+    "open_url": "fetch_web",
+    "read_page": "fetch_web",
+    "finish": "done",
+    "stop": "done",
+    "answer": "done",
+    "final": "done",
+}
+
+# Fields the planner must echo back for a tool to be executable.
+SPEC = {
+    "run_command": ("command",),
+    "read_file": ("path",),
+    "write_file": ("path", "content"),
+    "list_files": (),
+    "http_request": ("url",),
+    "fetch_web": ("url",),
+    "done": (),
+}
+
+SYSTEM = """You are Workelate_CLI, an autonomous agent that operates a shell and the web \
+inside the user's workspace. You work in a loop: you choose ONE action, you receive its \
+observation, then you choose the next action. You never ask the user to run things \
+yourself and you never describe what you would do - you act.
+
+Reply with exactly one JSON object and nothing else. No prose, no markdown fences.
+
+TOOLS
+  run_command  {"tool":"run_command","command":"<shell>","cwd":"<optional>","timeout":<sec>,"thought":"..."}
+  read_file    {"tool":"read_file","path":"<workspace-relative path>","thought":"..."}
+  write_file   {"tool":"write_file","path":"<workspace-relative path>","content":"<FULL new file text>","thought":"..."}
+  list_files   {"tool":"list_files","prefix":"<optional prefix>","thought":"..."}
+  http_request {"tool":"http_request","url":"<http(s) url>","method":"GET|POST|PUT|PATCH|DELETE","headers":{},"body":"<optional>","thought":"..."}
+  fetch_web    {"tool":"fetch_web","url":"<http(s) url>","thought":"..."}   # returns page text
+  done         {"tool":"done","outcome":"<final answer>","thought":"..."}
+
+HOW TO DECIDE THE NEXT ACTION
+1. Restate the GOAL to yourself and ask: what single fact or effect is still missing?
+2. If you do not know the workspace layout or a file's contents, inspect first
+   (list_files / read_file) instead of guessing paths.
+3. Prefer actions that produce evidence (command output, file contents, HTTP status)
+   over actions that only change state.
+4. After a change, verify it in a later step (re-read the file, re-run the check).
+5. Use the fewest steps that still reach and verify the goal.
+
+HARD RULES
+- Exactly one action per reply, valid JSON, listed tool name.
+- `write_file` must include the COMPLETE file content, not a diff or a placeholder.
+- Paths are workspace-relative. Never try to escape the workspace with `..` or absolute paths.
+- Use `run_command` for anything CLI-ish (git, npm, pip, python, tests, grep, curl).
+- Use `fetch_web` to READ a page; `http_request` to CALL an API or check a status code.
+- Never repeat an action that already failed the same way - change the approach or the input.
+- Never re-issue an action that already succeeded; build on its observation.
+- Only call `done` when the goal is achieved, or when you are genuinely blocked.
+- `outcome` must contain concrete results (paths, command output, findings), never a promise
+  like "I will now ...". If blocked, state precisely what blocked you.
+"""
+
+PLANNER_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))
 
 
-def next_action(goal: str, history: list[dict], files: list[str] | None = None) -> dict:
+class PlannerError(RuntimeError):
+    """Raised when the model reply cannot be turned into a usable action."""
+
+
+def next_action(
+    goal: str,
+    history: list[dict],
+    files: list[str] | None = None,
+    extra_hint: str | None = None,
+) -> dict:
+    """Return the next normalized action, or drive the fallback when no key is set."""
     if not llm.is_configured():
         return _fallback(goal, history)
 
-    context = "\n".join(
-        f"[{h['index']}] {h['tool']} {h['input']}\n  -> {h['observation']}" for h in history
-    ) or "(nothing yet)"
+    context = (
+        "\n".join(
+            f"[{h['index']}] {h['tool']} {h['input']}\n  -> {h['observation']}" for h in history
+        )
+        or "(nothing yet - this is step 1)"
+    )
 
     listing = ""
     if files:
-        listing = "\nWorkspace files: " + ", ".join(files[:60])
+        shown = ", ".join(files[:80])
+        more = f" (+{len(files) - 80} more)" if len(files) > 80 else ""
+        listing = f"\nWorkspace files: {shown}{more}"
+
+    hint = f"\n\nIMPORTANT: {extra_hint}" if extra_hint else ""
 
     user = (
         f"GOAL: {goal}{listing}\n\n"
-        f"STEPS SO FAR:\n{context}\n\n"
-        "Reply with the single next JSON action."
+        f"STEPS SO FAR:\n{context}{hint}\n\n"
+        "Choose the single next action. Reply with one JSON object."
     )
-    return llm.chat_json(
-        [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+    raw = llm.chat(
+        [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
+        temperature=PLANNER_TEMPERATURE,
     )
+    return parse_action(raw)
+
+
+def parse_action(raw: str) -> dict:
+    """Turn a model reply into a validated action dict.
+
+    Tolerates ```json fences, surrounding prose, and unknown-tool guesses. Raises
+    PlannerError when the reply contains no usable JSON object or the tool is not
+    recognized.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise PlannerError("empty planner reply")
+
+    data = _extract_json_object(raw.strip())
+    if not isinstance(data, dict):
+        raise PlannerError(f"reply was not a JSON object: {raw[:200]!r}")
+
+    tool = str(data.get("tool") or data.get("name") or data.get("action") or "").strip().lower()
+    tool = ALIASES.get(tool, tool)
+    if tool not in TOOLS:
+        raise PlannerError(f"unknown tool {tool!r}; allowed: {', '.join(TOOLS)}")
+    data["tool"] = tool
+
+    if not isinstance(data.get("thought"), str):
+        data["thought"] = ""
+
+    _require(data, tool)
+    return data
+
+
+def _extract_json_object(text: str) -> dict | None:
+    """Pull the first decodable JSON object out of a noisy reply."""
+    if "```" in text:
+        text = re.sub(r"```[a-zA-Z]*", "", text).replace("```", "").strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Scan for a balanced {...} block (regex alone breaks on nested braces/strings).
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_str = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        break
+        start = text.find("{", start + 1)
+    return None
+
+
+def _require(action: dict, tool: str) -> None:
+    """Validate the fields each tool needs so the executor never gets a blank call."""
+    for field in SPEC[tool]:
+        if field == "content":
+            if "content" not in action:
+                raise PlannerError("write_file needs 'content'")
+            continue
+        if not str(action.get(field, "")).strip():
+            raise PlannerError(f"{tool} needs a non-empty {field!r}")
 
 
 def _fallback(goal: str, history: list[dict]) -> dict:
@@ -57,5 +247,14 @@ def _fallback(goal: str, history: list[dict]) -> dict:
 
 
 def workspace_files() -> list[str]:
-    """Optional repo listing to ground the LLM. Empty when GitHub is unset."""
-    return crawler.list_files()
+    """Repo listing when GitHub is configured, else the local workspace walk."""
+    if crawler.is_configured():
+        files = crawler.list_files()
+        if files:
+            return files
+    try:
+        from .executor import workspace_files as local_files
+
+        return local_files()
+    except Exception:  # noqa: BLE001
+        return []

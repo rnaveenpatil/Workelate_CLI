@@ -1,17 +1,27 @@
 """Turns raw tool output into a short, readable observation for the LLM."""
 
-MAX_LINES = 60
-MAX_CHARS = 4000
+MAX_LINES = 80
+MAX_CHARS = 6000
 
 
 def observe(result: dict) -> str:
-    """Compact one-line-per-fact summary of a tool result."""
+    """Compact summary of a tool result: status line, then stdout/stderr."""
     if not isinstance(result, dict):
         return f"unexpected result: {result!r}"
 
     status = "OK" if result.get("ok") else "FAILED"
     code = result.get("exit_code", "?")
     lines = [f"status={status} exit_code={code}"]
+
+    if result.get("status") is not None:
+        where = result.get("url", "")
+        ctype = result.get("content_type", "")
+        detail = f"http_status={result['status']}"
+        if ctype:
+            detail += f" content_type={ctype}"
+        if where:
+            detail += f" url={where}"
+        lines.append(detail)
 
     out = (result.get("stdout") or "").strip()
     err = (result.get("stderr") or "").strip()

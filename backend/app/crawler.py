@@ -3,19 +3,31 @@
 Needs (both empty by default):
     GITHUB_TOKEN=
     GITHUB_REPO=owner/name        # e.g. rnaveenpatil/Workelate_CLI
+    GITHUB_BRANCH=main
+
+When GitHub is not configured the executor's local walker is used instead, so the
+planner always gets *some* grounding context.
 """
 
 import os
 
 import httpx
 
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
-GITHUB_REPO = os.getenv("GITHUB_REPO", "")
-GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
+
+def token() -> str:
+    return os.getenv("GITHUB_TOKEN", "").strip()
+
+
+def repo() -> str:
+    return os.getenv("GITHUB_REPO", "").strip()
+
+
+def branch() -> str:
+    return os.getenv("GITHUB_BRANCH", "main").strip() or "main"
 
 
 def is_configured() -> bool:
-    return bool(GITHUB_TOKEN.strip() and GITHUB_REPO.strip())
+    return bool(token() and repo())
 
 
 def list_files(limit: int = 200, prefix: str = "") -> list[str]:
@@ -24,10 +36,10 @@ def list_files(limit: int = 200, prefix: str = "") -> list[str]:
         return []
     try:
         resp = httpx.get(
-            f"https://api.github.com/repos/{GITHUB_REPO}/git/trees/{GITHUB_BRANCH}",
+            f"https://api.github.com/repos/{repo()}/git/trees/{branch()}",
             params={"recursive": "1"},
             headers={
-                "Authorization": f"Bearer {GITHUB_TOKEN}",
+                "Authorization": f"Bearer {token()}",
                 "Accept": "application/vnd.github+json",
             },
             timeout=30,
@@ -39,3 +51,12 @@ def list_files(limit: int = 200, prefix: str = "") -> list[str]:
         return paths[:limit]
     except Exception:  # noqa: BLE001
         return []
+
+
+def status() -> dict:
+    """Redacted diagnostics for /health."""
+    return {
+        "configured": is_configured(),
+        "repo": repo(),
+        "branch": branch(),
+    }

@@ -1,21 +1,67 @@
-"""Runs the actions the planner chose. Deliberately tiny: 3 tools."""
+"""Runs the actions the planner chose.
+
+Every branch returns the same result shape (``ok``/``exit_code``/``stdout``/
+``stderr``) so the inspector and the LLM see one consistent format.
+"""
 
 import os
 
-from . import cli
+from . import cli, crawler, web
 
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", os.getcwd())
 
-TOOLS = ("run_command", "read_file", "write_file")
+TOOLS = (
+    "run_command",
+    "read_file",
+    "write_file",
+    "list_files",
+    "http_request",
+    "fetch_web",
+)
+
+MAX_READ = 8000
+LIST_LIMIT = 200
+
+
+def _root() -> str:
+    return os.path.abspath(WORKSPACE_DIR)
 
 
 def _safe_path(path: str) -> str:
-    """Keep file access inside the workspace."""
-    full = os.path.abspath(os.path.join(WORKSPACE_DIR, path))
-    root = os.path.abspath(WORKSPACE_DIR)
-    if not full.startswith(root):
+    """Resolve a workspace-relative path, refusing anything outside the workspace."""
+    raw = str(path or "").strip()
+    if not raw:
+        raise ValueError("path is required")
+
+    root = _root()
+    full = os.path.abspath(raw if os.path.isabs(raw) else os.path.join(root, raw))
+
+    if full != root and not full.startswith(root + os.sep):
         raise ValueError(f"path outside workspace: {path}")
     return full
+
+
+def _local_listing(prefix: str = "", limit: int = LIST_LIMIT, max_depth: int = 6) -> list[str]:
+    """Walk the workspace and return relative file paths."""
+    root = _root()
+    found: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in {".git", "__pycache__", ".venv", "node_modules", ".mypy_cache"}
+        ]
+        depth = dirpath[len(root) :].count(os.sep)
+        if depth >= max_depth:
+            dirnames[:] = []
+        for name in sorted(filenames):
+            rel = os.path.relpath(os.path.join(dirpath, name), root)
+            if prefix and not rel.startswith(prefix):
+                continue
+            found.append(rel)
+            if len(found) >= limit:
+                return sorted(found)
+    return sorted(found)
 
 
 def execute(action: dict) -> dict:
@@ -30,19 +76,68 @@ def execute(action: dict) -> dict:
 
     if tool == "read_file":
         try:
-            with open(_safe_path(action.get("path", "")), "r", encoding="utf-8", errors="replace") as fh:
-                return {"ok": True, "stdout": fh.read()[:8000], "stderr": "", "exit_code": 0}
+            with open(
+                _safe_path(action.get("path", "")), "r", encoding="utf-8", errors="replace"
+            ) as fh:
+                return {"ok": True, "stdout": fh.read()[:MAX_READ], "stderr": "", "exit_code": 0}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "stdout": "", "stderr": str(exc), "exit_code": -1}
 
     if tool == "write_file":
         try:
             full = _safe_path(action.get("path", ""))
-            os.makedirs(os.path.dirname(full), exist_ok=True)
+            parent = os.path.dirname(full)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            content = action.get("content", "")
             with open(full, "w", encoding="utf-8") as fh:
-                fh.write(action.get("content", ""))
-            return {"ok": True, "stdout": f"wrote {action.get('path')}", "stderr": "", "exit_code": 0}
+                fh.write(content if isinstance(content, str) else str(content))
+            return {
+                "ok": True,
+                "stdout": f"wrote {action.get('path')} ({len(str(content))} chars)",
+                "stderr": "",
+                "exit_code": 0,
+            }
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "stdout": "", "stderr": str(exc), "exit_code": -1}
 
+    if tool == "list_files":
+        prefix = str(action.get("prefix", "") or "")
+        try:
+            files = _local_listing(prefix=prefix)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "stdout": "", "stderr": str(exc), "exit_code": -1}
+        return {
+            "ok": True,
+            "stdout": "\n".join(files) or "(no files)",
+            "stderr": "",
+            "exit_code": 0,
+        }
+
+    if tool == "http_request":
+        return web.http_request(
+            action.get("url", ""),
+            method=action.get("method", "GET"),
+            headers=action.get("headers") or {},
+            body=action.get("body"),
+            timeout=float(action.get("timeout", web.DEFAULT_TIMEOUT)),
+        )
+
+    if tool == "fetch_web":
+        return web.fetch_page(
+            action.get("url", ""),
+            timeout=float(action.get("timeout", web.DEFAULT_TIMEOUT)),
+        )
+
     return {"ok": False, "stdout": "", "stderr": f"unknown tool: {tool!r}", "exit_code": -1}
+
+
+def workspace_files() -> list[str]:
+    """Local listing used to ground the planner when GitHub is not configured."""
+    try:
+        return _local_listing()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+__all__ = ["TOOLS", "execute", "workspace_files", "_safe_path", "_local_listing"]

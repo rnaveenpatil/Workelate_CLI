@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 class TaskRequest(BaseModel):
     goal: str = Field(..., min_length=1, description="What the user wants done")
-    max_steps: int = Field(6, ge=1, le=25)
+    max_steps: int = Field(8, ge=1, le=25)
     cwd: str | None = None
 
 

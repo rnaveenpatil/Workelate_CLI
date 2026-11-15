@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from . import agent, cli, crawler, llm
+from . import agent, cli, crawler, executor, llm, planner
 from .schemas import TaskRequest, TaskResult
 
 router = APIRouter()
@@ -13,15 +13,28 @@ def health() -> dict:
     return {
         "ok": True,
         "agent": "Workelate_CLI",
-        "cli_mode": cli.mode(),
-        "llm_configured": llm.is_configured(),
-        "github_configured": crawler.is_configured(),
+        "tools": list(planner.TOOLS),
+        "terminal": cli.status(),
+        "llm": llm.status(),
+        "github": crawler.status(),
     }
+
+
+@router.get("/tools")
+def tools() -> dict:
+    """The tool surface the planner may choose from."""
+    return {"tools": list(planner.TOOLS), "executor_tools": list(executor.TOOLS)}
 
 
 @router.get("/files")
 def files(prefix: str = "") -> dict:
-    return {"files": crawler.list_files(prefix=prefix)}
+    """GitHub listing when configured, otherwise a local workspace walk."""
+    if crawler.is_configured():
+        return {"source": "github", "files": crawler.list_files(prefix=prefix)}
+    listing = executor.workspace_files()
+    if prefix:
+        listing = [p for p in listing if p.startswith(prefix)]
+    return {"source": "local", "files": listing}
 
 
 @router.post("/task", response_model=TaskResult)
