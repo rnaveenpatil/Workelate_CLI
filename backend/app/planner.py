@@ -144,6 +144,7 @@ def next_action(
     raw = llm.chat(
         [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
         temperature=PLANNER_TEMPERATURE,
+        validator=parse_action,
     )
     return parse_action(raw)
 
