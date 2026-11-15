@@ -43,14 +43,15 @@ def run_task(
         action = None
         for _ in range(1, PLANNER_RETRIES + 1):
             try:
-                action = planner.next_action(
-                    goal, history, extra_hint=hint, conversation=conversation
-                )
+                planner_kwargs = {"extra_hint": hint}
+                if conversation:
+                    planner_kwargs["conversation"] = conversation
+                action = planner.next_action(goal, history, **planner_kwargs)
                 break
             except planner.PlannerError as exc:
                 hint = (
-                    f"Your previous response was invalid ({exc}). Return one valid "
-                    "JSON object matching one of the documented action shapes."
+                    f"Your previous response was unusable/invalid ({exc}). Return one "
+                    "valid JSON object matching one of the documented action shapes."
                 )
             except Exception as exc:  # noqa: BLE001
                 stopped = f"planner_error: {exc}"
@@ -81,14 +82,18 @@ def run_task(
             steps.append(
                 Step(index=i, tool="done", input={}, observation=action.get("thought", ""))
             )
-            if not history:
-                summary = proposed_outcome or "The agent finished without providing a response."
-            else:
+            if last_ok is not False and proposed_outcome:
+                # The planner already generated this final answer from the execution
+                # trace. Avoid a redundant second LLM call that can discard its result.
+                summary = proposed_outcome
+            elif history:
                 summary = _summarize(
                     goal, history, proposed_outcome,
-                    completed=last_ok is not False,
-                    stopped="done" if last_ok is not False else "last_action_failed",
+                    completed=False,
+                    stopped="last_action_failed",
                 )
+            else:
+                summary = "The agent finished without providing a response."
             return TaskResult(
                 ok=last_ok is not False, goal=goal, mode=mode, steps=steps,
                 outcome=summary,
