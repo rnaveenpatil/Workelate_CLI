@@ -13,7 +13,7 @@ def health() -> dict:
     return {
         "ok": True,
         "agent": "Workelate_CLI",
-        "tools": list(planner.TOOLS),
+        "tools": list(planner.WORKSPACE_TOOLS),
         "terminal": cli.status(),
         "llm": llm.status(),
     }
@@ -21,8 +21,8 @@ def health() -> dict:
 
 @router.get("/tools")
 def tools() -> dict:
-    """The tool surface the planner may choose from."""
-    return {"tools": list(planner.TOOLS), "executor_tools": list(executor.TOOLS)}
+    """Only workspace capabilities are exposed; answer/clarify are internal actions."""
+    return {"tools": list(planner.WORKSPACE_TOOLS), "executor_tools": list(executor.TOOLS)}
 
 
 @router.get("/files")
@@ -36,4 +36,7 @@ def files(prefix: str = "") -> dict:
 
 @router.post("/task", response_model=TaskResult)
 def task(req: TaskRequest) -> TaskResult:
-    return agent.run_task(req.goal, max_steps=req.max_steps, cwd=req.cwd)
+    conversation = [message.model_dump() for message in req.conversation]
+    return agent.run_task(
+        req.goal, max_steps=req.max_steps, cwd=req.cwd, conversation=conversation
+    )
