@@ -264,7 +264,7 @@ function addAssistantResult(data) {
 
   bubble.append(el("div", "conclusion", outcome));
 
-  if (data.stopped_because && data.stopped_because !== "done") {
+  if (data.stopped_because && !["done", "answered_directly", "clarification_required"].includes(data.stopped_because)) {
     bubble.append(el("div", "stop-reason", `stopped: ${data.stopped_because}`));
   }
 
