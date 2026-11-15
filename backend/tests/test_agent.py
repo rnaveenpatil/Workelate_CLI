@@ -345,12 +345,24 @@ def test_agent_fallback_mode_without_llm(monkeypatch):
     assert "fallback-ok" in result.outcome or result.ok is False
 
 
-def test_agent_fallback_reports_failed_command(monkeypatch):
+def test_agent_fallback_does_not_execute_goal_without_llm(monkeypatch):
+    """Without an LLM, natural-language goals must never be passed to the shell."""
     monkeypatch.setattr(llm, "is_configured", lambda: False)
     monkeypatch.setenv("CLI_MODE", "local")
+    calls = []
+    monkeypatch.setattr(
+        executor, "execute",
+        lambda action: calls.append(action) or {
+            "ok": False, "stdout": "", "stderr": "should not run", "exit_code": 3
+        },
+    )
+
     result = agent.run_task("exit 3", max_steps=3)
+
     assert result.ok is False
-    assert result.stopped_because == "fallback_command_failed"
+    assert result.stopped_because == "llm_not_configured"
+    assert "No terminal command was run" in result.outcome
+    assert calls == []
 
 
 # ------------------------------- Modal sandbox ------------------------------

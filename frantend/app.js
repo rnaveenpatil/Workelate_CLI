@@ -6,6 +6,7 @@ const chat = $("chat");
 const empty = $("empty");
 const emptyTip = $("emptyTip");
 const messages = [];
+const conversation = [];
 const form = $("form");
 const input = $("input");
 const sendBtn = $("send");
@@ -67,6 +68,7 @@ function showEmpty() {
   empty.hidden = false;
   for (const node of chat.querySelectorAll(".msg")) node.remove();
   messages.length = 0;
+  conversation.length = 0;
   chat.scrollTop = 0;
 }
 
@@ -127,14 +129,14 @@ async function checkHealth() {
     if (mode !== "local") {
       bits.push(terminal.configured ? "sandbox configured" : "sandbox not configured");
     }
-    bits.push(llm.configured ? `LLM ${llm.model || "on"}` : "LLM off · commands only");
+    bits.push(llm.configured ? `LLM ${llm.model || "on"}` : "LLM off · agent disabled");
 
     setStatus("online", bits.join(" · "));
     statusEl.title = `Backend: ${apiLabel()}`;
 
     emptyTip.textContent = llm.configured
       ? `Connected to ${apiLabel()}. Ask in plain English or type a command.`
-      : `Connected to ${apiLabel()} · configure an LLM key to enable natural-language terminal tasks. No command will run without it.`;
+      : `Connected to ${apiLabel()} · configure an LLM key to enable conversation and workspace actions. No action will run without it.`;
   } catch (err) {
     setStatus("offline", "backend offline");
     statusEl.title = String((err && err.message) || err);
@@ -262,7 +264,7 @@ function addAssistantResult(data) {
 
   bubble.append(el("div", "conclusion", outcome));
 
-  if (data.stopped_because && data.stopped_because !== "done") {
+  if (data.stopped_because && !["done", "answered_directly", "clarification_required"].includes(data.stopped_because)) {
     bubble.append(el("div", "stop-reason", `stopped: ${data.stopped_because}`));
   }
 
@@ -338,17 +340,21 @@ async function sendGoal(goal) {
   maxStepsEl.value = String(maxSteps);
 
   try {
+    const priorConversation = conversation.slice(-16);
     const data = await fetchJSON(
       "/task",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ goal: text, max_steps: maxSteps }),
+        body: JSON.stringify({ goal: text, max_steps: maxSteps, conversation: priorConversation }),
       },
       10 * 60 * 1000
     );
     pending.remove();
     addAssistantResult(data);
+    conversation.push({ role: "user", content: text });
+    conversation.push({ role: "assistant", content: String(data.outcome || "") });
+    if (conversation.length > 16) conversation.splice(0, conversation.length - 16);
   } catch (err) {
     pending.remove();
     addError(err, text);
