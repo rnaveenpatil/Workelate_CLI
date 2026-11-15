@@ -27,7 +27,7 @@ import httpx
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
-MAX_FALLBACK_PROVIDERS = 3
+MAX_FALLBACK_PROVIDERS = 2
 
 
 def _env(name: str) -> str:
@@ -46,7 +46,7 @@ def providers() -> list[dict]:
     """Configured endpoints: primary first, then numbered fallbacks.
 
     Primary:   LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
-    Fallbacks: LLM_2_* ... LLM_3_* (LLM_1_* is accepted as an alias)
+    Fallbacks: LLM_2_* and LLM_3_*
 
     A provider is only used when its API key is set. Empty base/model values
     inherit the primary ones, so a fallback can be just a key + model.
@@ -64,7 +64,7 @@ def providers() -> list[dict]:
         found.append({"name": name, "base_url": base, "api_key": key, "model": model})
 
     add("primary", _env("LLM_API_KEY"), _env("LLM_BASE_URL"), _env("LLM_MODEL"))
-    for index in range(1, MAX_FALLBACK_PROVIDERS + 1):
+    for index in range(2, MAX_FALLBACK_PROVIDERS + 2):
         add(
             f"LLM_{index}",
             _env(f"LLM_{index}_API_KEY"),
@@ -110,12 +110,13 @@ def _extract_content(payload: dict) -> str:
     return content
 
 
-def chat(messages: list[dict], temperature: float = 0.2, timeout: float | None = None) -> str:
+def chat(messages: list[dict], temperature: float = 0.2, timeout: float | None = None, validator=None) -> str:
     """Single completion with provider fallback and bounded retries.
 
     Providers are tried in ``providers()`` order. A provider is abandoned after
-    its retries are exhausted (5xx/network) or immediately on a 4xx reply, then
-    the next provider is tried.
+    its retries are exhausted (5xx/network/invalid response) or immediately on a 4xx reply, then
+    the next provider is tried. An optional validator lets callers reject malformed
+    model output and trigger provider fallback.
     """
     found = providers()
     if not found:
@@ -158,7 +159,10 @@ def chat(messages: list[dict], temperature: float = 0.2, timeout: float | None =
                         pass
                     last_error = RuntimeError(f"LLM HTTP {resp.status_code}: {detail}")
                     break
-                return _extract_content(resp.json())
+                content = _extract_content(resp.json())
+                if validator is not None:
+                    validator(content)
+                return content
             except Exception as exc:  # noqa: BLE001  (timeouts, connection resets)
                 last_error = exc
 
