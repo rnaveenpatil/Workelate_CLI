@@ -115,15 +115,7 @@ def next_action(
     user += "\n\nChoose the appropriate response or the single next action. Return the required JSON object."
     messages.append({"role": "user", "content": user})
 
-    def validate(raw: str) -> str:
-        parse_action(raw)
-        return raw
-
-    raw = llm.chat(
-        messages,
-        temperature=PLANNER_TEMPERATURE,
-        validator=validate,
-    )
+    raw = llm.chat(messages, temperature=PLANNER_TEMPERATURE)
     return parse_action(raw)
 
 
