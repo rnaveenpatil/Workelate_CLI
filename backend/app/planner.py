@@ -185,8 +185,9 @@ def _extract_json_object(text: str) -> dict | None:
 
 def _require(action: dict, tool: str) -> None:
     for field in SPEC[tool]:
-        if not str(action.get(field, "")).strip():
-            raise PlannerError(f"{tool} needs a non-empty {field!r}")
+        value = action.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise PlannerError(f"{tool} needs a non-empty string {field!r}")
 
 
 def _fallback(goal: str, history: list[dict]) -> dict:
