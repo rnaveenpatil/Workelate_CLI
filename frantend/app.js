@@ -134,7 +134,7 @@ async function checkHealth() {
 
     emptyTip.textContent = llm.configured
       ? `Connected to ${apiLabel()}. Ask in plain English or type a command.`
-      : `Connected to ${apiLabel()} · no LLM key, so your message runs directly as a shell command.`;
+      : `Connected to ${apiLabel()} · configure an LLM key to enable natural-language terminal tasks. No command will run without it.`;
   } catch (err) {
     setStatus("offline", "backend offline");
     statusEl.title = String((err && err.message) || err);

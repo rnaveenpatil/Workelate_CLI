@@ -219,18 +219,11 @@ def _require(action: dict, tool: str) -> None:
 
 
 def _fallback(goal: str, history: list[dict]) -> dict:
-    """No LLM key -> treat the goal itself as one shell command."""
-    if history:
-        return {
-            "tool": "done",
-            "outcome": history[-1]["observation"],
-            "thought": "no LLM configured, single command already run",
-        }
-    return {
-        "tool": "run_command",
-        "command": goal,
-        "thought": "no LLM configured, running the goal as a command",
-    }
+    """Natural-language planning requires an LLM; never execute raw user text."""
+    raise PlannerError(
+        "LLM not configured. Configure an API key to translate natural-language goals "
+        "into deliberate terminal actions."
+    )
 
 
 def workspace_files() -> list[str]:
