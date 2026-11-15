@@ -21,14 +21,13 @@ def test_planner_accepts_clarification_and_workspace_actions():
     )["tool"] == "run_command"
 
 
-def test_planner_rejects_plain_text_and_missing_action_fields():
-    try:
-        planner.parse_action("Hello! How can I help?")
-    except planner.PlannerError:
-        pass
-    else:
-        raise AssertionError("plain text must not be accepted as a structured action")
+def test_planner_accepts_plain_text_as_direct_conversation():
+    action = planner.parse_action("Hello! How can I help?")
+    assert action["tool"] == "respond"
+    assert action["response"] == "Hello! How can I help?"
 
+
+def test_planner_rejects_missing_action_fields():
     try:
         planner.parse_action('{"tool":"run_command"}')
     except planner.PlannerError:
