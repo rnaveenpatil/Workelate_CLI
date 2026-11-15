@@ -43,8 +43,7 @@ The chat UI is served by the same backend at **http://localhost:8000/ui/**.
 
 It sends each message to `POST /task`, shows a concise user-facing summary, and keeps
 the actual commands, inputs, and raw terminal observations in the expandable execution log.
-The final summary is generated from the execution trace; if synthesis fails, a deterministic
-report is used instead. It can also be opened directly from
+The model independently decides whether to answer directly, ask one necessary clarification, or use workspace tools. This decision is semantic and model-driven; there is no keyword-based intent classifier. Direct answers do not trigger terminal access or an extra summary call. For workspace tasks, the final report explains what the agent understood, what it actually changed or checked, the evidence, and any blockers. The final summary is generated from the execution trace; if synthesis fails, a deterministic report is used instead. It can also be opened directly from
 `frantend/index.html`; in that case it calls `http://localhost:8000` by default.
 Override the API URL with `?api=http://127.0.0.1:8000` or the **API** button.
 
@@ -109,7 +108,7 @@ LLM_3_MODEL=
 ```
 
 If a provider fails after its retries (5xx/network) or returns a 4xx, the agent
-tries the next one. An LLM key is required for natural-language requests. Without one, the agent refuses
-to execute the request rather than treating an English sentence as a shell command.
+tries the next one. An LLM key is required for autonomous natural-language reasoning. Without one, the agent refuses
+to guess whether a request needs an answer or terminal action, and it never treats an English sentence as a shell command.
 This prevents accidental or confusing terminal execution. Optional: `LLM_TEMPERATURE=0.2`,
 `LLM_TIMEOUT=120`, `LLM_RETRIES=2`.
