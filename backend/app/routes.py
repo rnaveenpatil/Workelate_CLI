@@ -13,7 +13,7 @@ def health() -> dict:
     return {
         "ok": True,
         "agent": "Workelate_CLI",
-        "tools": list(planner.TOOLS),
+        "tools": list(executor.TOOLS),
         "terminal": cli.status(),
         "llm": llm.status(),
     }
