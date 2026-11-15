@@ -127,7 +127,7 @@ async function checkHealth() {
     if (mode !== "local") {
       bits.push(terminal.configured ? "sandbox configured" : "sandbox not configured");
     }
-    bits.push(llm.configured ? `LLM ${llm.model || "on"}` : "LLM off · commands only");
+    bits.push(llm.configured ? `LLM ${llm.model || "on"}` : "LLM off · agent unavailable");
 
     setStatus("online", bits.join(" · "));
     statusEl.title = `Backend: ${apiLabel()}`;
