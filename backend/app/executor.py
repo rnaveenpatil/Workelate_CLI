@@ -10,12 +10,8 @@ from . import cli
 
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", os.getcwd())
 
-TOOLS = (
-    "run_command",
-    "read_file",
-    "write_file",
-    "list_files",
-)
+# The model has one workspace tool. File operations go through the terminal.
+TOOLS = ("run_command",)
 
 MAX_READ = 8000
 LIST_LIMIT = 200
