@@ -340,7 +340,7 @@ async function sendGoal(goal) {
   maxStepsEl.value = String(maxSteps);
 
   try {
-    const priorConversation = conversation.slice(-20);
+    const priorConversation = conversation.slice(-16);
     const data = await fetchJSON(
       "/task",
       {
@@ -354,7 +354,7 @@ async function sendGoal(goal) {
     addAssistantResult(data);
     conversation.push({ role: "user", content: text });
     conversation.push({ role: "assistant", content: String(data.outcome || "") });
-    if (conversation.length > 20) conversation.splice(0, conversation.length - 20);
+    if (conversation.length > 16) conversation.splice(0, conversation.length - 16);
   } catch (err) {
     pending.remove();
     addError(err, text);
