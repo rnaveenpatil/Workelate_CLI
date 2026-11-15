@@ -1,7 +1,7 @@
 """Turns raw tool output into a short, readable observation for the LLM."""
 
-MAX_LINES = 80
-MAX_CHARS = 6000
+MAX_LINES = 200
+MAX_CHARS = 20000
 
 
 def observe(result: dict) -> str:
