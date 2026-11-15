@@ -1,8 +1,9 @@
-"""Tests for the planner / executor / web layer.
+"""Tests for the planner / executor / terminal layer.
 
 Run:  cd backend && python -m pytest -q
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -10,14 +11,142 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import agent, cli, executor, inspector, llm, planner, web  # noqa: E402
+from app import agent, cli, executor, inspector, llm, planner  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def _local_terminal(monkeypatch):
-    """Keep tests hermetic: never talk to the real remote terminal."""
+    """Keep tests hermetic: never talk to the real remote terminal or LLM."""
     monkeypatch.setenv("CLI_MODE", "local")
     monkeypatch.delenv("SANDBOX_CONTAINER", raising=False)
+    cli._reset_modal_cache()
+    for prefix in ("", "_1", "_2", "_3"):
+        for suffix in ("API_KEY", "BASE_URL", "MODEL"):
+            monkeypatch.delenv(f"LLM{prefix}_{suffix}", raising=False)
+
+
+# ------------------------------- llm config --------------------------------
+
+
+def test_llm_reads_base_url_key_model_from_env(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://openrouter.ai/api/v1/")
+    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_MODEL", "openai/gpt-4o-mini")
+    assert llm.base_url() == "https://openrouter.ai/api/v1"
+    assert llm.api_key() == "sk-test"
+    assert llm.model() == "openai/gpt-4o-mini"
+    assert llm.status() == {
+        "configured": True,
+        "api_key_set": True,
+        "model": "openai/gpt-4o-mini",
+        "base_url": "https://openrouter.ai/api/v1",
+        "provider_count": 1,
+        "providers": [
+            {
+                "name": "primary",
+                "base_url": "https://openrouter.ai/api/v1",
+                "model": "openai/gpt-4o-mini",
+                "api_key_set": True,
+            }
+        ],
+    }
+
+
+def test_llm_empty_base_url_and_model_fall_back(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "")
+    monkeypatch.setenv("LLM_MODEL", "  ")
+    assert llm.base_url() == llm.DEFAULT_BASE_URL
+    assert llm.model() == llm.DEFAULT_MODEL
+
+
+def test_llm_providers_inherit_primary_base_and_model(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://primary.example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "key-1")
+    monkeypatch.setenv("LLM_MODEL", "model-1")
+    monkeypatch.setenv("LLM_2_BASE_URL", "https://second.example/v1")
+    monkeypatch.setenv("LLM_2_API_KEY", "key-2")
+    monkeypatch.setenv("LLM_2_MODEL", "model-2")
+    monkeypatch.setenv("LLM_3_API_KEY", "key-3")
+
+    found = llm.providers()
+    assert [p["name"] for p in found] == ["primary", "LLM_2", "LLM_3"]
+    assert found[1]["base_url"] == "https://second.example/v1"
+    assert found[1]["model"] == "model-2"
+    assert found[2]["base_url"] == "https://primary.example/v1"
+    assert found[2]["model"] == "model-1"
+
+    status = llm.status()
+    assert status["provider_count"] == 3
+    assert [p["name"] for p in status["providers"]] == ["primary", "LLM_2", "LLM_3"]
+    assert "api_key" not in status["providers"][0]
+
+
+class _FakeResponse:
+    def __init__(self, status_code, payload=None):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = json.dumps(self._payload)
+
+    def json(self):
+        return self._payload
+
+
+def _mock_two_providers(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://primary.example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "key-1")
+    monkeypatch.setenv("LLM_MODEL", "model-1")
+    monkeypatch.setenv("LLM_2_BASE_URL", "https://second.example/v1")
+    monkeypatch.setenv("LLM_2_API_KEY", "key-2")
+    monkeypatch.setenv("LLM_2_MODEL", "model-2")
+    monkeypatch.setenv("LLM_RETRIES", "0")
+
+
+def test_llm_falls_back_after_5xx(monkeypatch):
+    _mock_two_providers(monkeypatch)
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append((url, json["model"]))
+        if "primary" in url:
+            return _FakeResponse(503, {"error": {"message": "down"}})
+        return _FakeResponse(200, {"choices": [{"message": {"content": "fallback-ok"}}]})
+
+    monkeypatch.setattr(llm.httpx, "post", fake_post)
+    assert llm.chat([{"role": "user", "content": "hi"}]) == "fallback-ok"
+    assert calls == [
+        ("https://primary.example/v1/chat/completions", "model-1"),
+        ("https://second.example/v1/chat/completions", "model-2"),
+    ]
+
+
+def test_llm_falls_back_after_4xx(monkeypatch):
+    _mock_two_providers(monkeypatch)
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(url)
+        if "primary" in url:
+            return _FakeResponse(401, {"error": {"message": "bad key"}})
+        return _FakeResponse(200, {"choices": [{"message": {"content": "second"}}]})
+
+    monkeypatch.setattr(llm.httpx, "post", fake_post)
+    assert llm.chat([{"role": "user", "content": "hi"}]) == "second"
+    assert len(calls) == 2
+
+
+def test_llm_all_providers_fail_reports_each(monkeypatch):
+    _mock_two_providers(monkeypatch)
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        return _FakeResponse(429, {"error": {"message": "rate limit"}})
+
+    monkeypatch.setattr(llm.httpx, "post", fake_post)
+    with pytest.raises(RuntimeError) as exc:
+        llm.chat([{"role": "user", "content": "hi"}])
+    message = str(exc.value)
+    assert message.startswith("all LLM providers failed")
+    assert "primary (model-1)" in message
+    assert "LLM_2 (model-2)" in message
 
 
 # --------------------------- planner.parse_action ---------------------------
@@ -58,7 +187,26 @@ def test_parse_rejects_missing_required_fields():
     with pytest.raises(planner.PlannerError):
         planner.parse_action('{"tool":"run_command"}')
     with pytest.raises(planner.PlannerError):
-        planner.parse_action('{"tool":"http_request"}')
+        planner.parse_action('{"tool":"write_file","path":"a.txt"}')
+
+
+def test_agent_toolset_is_terminal_only():
+    assert planner.TOOLS == (
+        "run_command",
+        "read_file",
+        "write_file",
+        "list_files",
+        "done",
+    )
+    assert executor.TOOLS == (
+        "run_command",
+        "read_file",
+        "write_file",
+        "list_files",
+    )
+    for name in ("http_request", "fetch_web"):
+        assert name not in planner.TOOLS
+        assert name not in executor.TOOLS
 
 
 def test_parse_rejects_empty_and_garbage():
@@ -105,40 +253,12 @@ def test_run_command_local(tmp_path, monkeypatch):
     assert bad["ok"] is False and bad["exit_code"] == 3
 
 
-# --------------------------------- web -------------------------------------
-
-
-def test_html_to_text_strips_markup():
-    raw = "<html><head><style>.x{}</style></head><body><h1>Hi</h1><p>A &amp; B</p></body></html>"
-    text = web.html_to_text(raw)
-    assert "Hi" in text and "A & B" in text
-    assert "<" not in text and ".x{}" not in text
-
-
-def test_http_request_rejects_bad_scheme():
-    r = web.http_request("ftp://example.com")
-    assert r["ok"] is False and "http" in r["stderr"].lower()
-
-
-def test_fetch_page_rejects_empty_url():
-    r = web.fetch_page("")
-    assert r["ok"] is False
-
-
-def test_http_request_live_smoke():
-    """Network-dependent; skipped automatically when offline."""
-    r = web.http_request("https://example.com", timeout=10)
-    if not r["ok"] and "request failed" in r["stderr"]:
-        pytest.skip("no network")
-    assert r["status"] in (200, 301, 302) and "example" in r["stdout"].lower()
-
-
 # ------------------------------- inspector ---------------------------------
 
 
-def test_observe_reports_status_and_http():
-    text = inspector.observe({"ok": True, "status": 200, "stdout": "body", "content_type": "text/html"})
-    assert "status=OK" in text and "http_status=200" in text and "body" in text
+def test_observe_reports_status_and_output():
+    text = inspector.observe({"ok": True, "exit_code": 0, "stdout": "body"})
+    assert "status=OK" in text and "exit_code=0" in text and "body" in text
 
 
 def test_observe_handles_failure_and_empty():
@@ -233,56 +353,98 @@ def test_agent_fallback_reports_failed_command(monkeypatch):
     assert result.stopped_because == "fallback_command_failed"
 
 
-# ------------------------------ Daytona sandbox -----------------------------
+# ------------------------------- Modal sandbox ------------------------------
+
+
+class _FakeStream:
+    def __init__(self, text: str):
+        self._text = text
+
+    def read(self) -> str:
+        return self._text
 
 
 class _FakeProcess:
-    def __init__(self):
-        self.calls: list[tuple] = []
+    def __init__(self, stdout: str = "", stderr: str = "", exit_code: int = 0):
+        self.stdout = _FakeStream(stdout)
+        self.stderr = _FakeStream(stderr)
+        self._exit_code = exit_code
 
-    def exec(self, command, cwd=None, timeout=None):
-        self.calls.append((command, cwd, timeout))
-        return type("Resp", (), {"result": "daytona-ok\n", "exit_code": 0})()
+    def wait(self) -> int:
+        return self._exit_code
 
 
 class _FakeSandbox:
-    state = "SandboxState.STARTED"
+    object_id = "sb-test"
 
     def __init__(self):
-        self.process = _FakeProcess()
+        self.calls: list[tuple] = []
+        self.running = True
+
+    def poll(self):
+        return None if self.running else 0
+
+    def exec(self, *args, timeout=None, workdir=None, **kwargs):
+        self.calls.append((args, timeout, workdir))
+        return _FakeProcess(stdout="modal-ok\n")
 
 
-def test_daytona_run_dispatches_to_sandbox(monkeypatch):
+def test_modal_run_dispatches_to_sandbox(monkeypatch):
     sandbox = _FakeSandbox()
-    monkeypatch.setenv("CLI_MODE", "daytona")
-    monkeypatch.setenv("DAYTONA_API_KEY", "test-key")
-    monkeypatch.setenv("DAYTONA_SANDBOX_ID", "raw-terml-test")
-    monkeypatch.setenv("DAYTONA_WORKDIR", "/home/daytona")
-    monkeypatch.setattr(cli, "_daytona_sandbox", lambda: sandbox)
+    monkeypatch.setenv("CLI_MODE", "modal")
+    monkeypatch.setenv("MODAL_WORKDIR", "/workspace")
+    monkeypatch.setattr(cli, "_modal_sandbox", lambda: sandbox)
 
     result = cli.run("echo hi")
     assert result["ok"] is True
-    assert result["stdout"].strip() == "daytona-ok"
-    assert sandbox.process.calls == [("echo hi", "/home/daytona", 120)]
+    assert result["stdout"].strip() == "modal-ok"
+    assert sandbox.calls == [(("bash", "-lc", "echo hi"), 120, "/workspace")]
 
 
-def test_daytona_status_reports_config(monkeypatch):
-    monkeypatch.setenv("CLI_MODE", "daytona")
-    monkeypatch.setenv("DAYTONA_API_KEY", "test-key")
-    monkeypatch.setenv("DAYTONA_SANDBOX_ID", "raw-terml-test")
+def test_modal_recreates_terminated_sandbox(monkeypatch):
+    old = _FakeSandbox()
+    old.running = False
+    new = _FakeSandbox()
+    monkeypatch.setenv("CLI_MODE", "modal")
+    monkeypatch.setenv("MODAL_IMAGE", "test-image")
+    monkeypatch.setattr(cli, "_create_modal_sandbox", lambda: new)
+
+    cli._reset_modal_cache()
+    cli._MODAL_CACHE["sandbox"] = old
+    cli._MODAL_CACHE["sandbox_signature"] = cli._modal_signature()
+
+    assert cli._modal_sandbox() is new
+    assert cli._MODAL_CACHE["sandbox"] is new
+
+
+def test_modal_image_reference_accepts_dashboard_url(monkeypatch):
+    monkeypatch.setenv("MODAL_PROFILE", "rnpvip685")
+    monkeypatch.setenv("MODAL_IMAGE", "https://modal.com/images/rnpvip685/main")
+    assert cli._modal_image_ref() == "main"
+    monkeypatch.setenv("MODAL_IMAGE", "rnpvip685/main")
+    assert cli._modal_image_ref() == "main"
+
+
+def test_modal_status_reports_config(monkeypatch):
+    monkeypatch.setenv("CLI_MODE", "modal")
+    monkeypatch.setenv("MODAL_TOKEN_ID", "ak-test")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "as-test")
+    monkeypatch.setenv("MODAL_PROFILE", "rnpvip685")
+    monkeypatch.setenv("MODAL_ENVIRONMENT", "main")
+    monkeypatch.setenv("MODAL_IMAGE", "main")
     status = cli.status()
-    assert status["mode"] == "daytona"
+    assert status["mode"] == "modal"
     assert status["configured"] is True
-    assert status["daytona"]["api_key_set"] is True
-    assert status["daytona"]["sandbox_id"] == "raw-terml-test"
+    assert status["modal"]["token_id_set"] is True
+    assert status["modal"]["token_secret_set"] is True
+    assert status["modal"]["image"] == "main"
 
 
 def test_executor_routes_file_tools_to_remote(monkeypatch):
     calls: list[tuple] = []
     ok = {"ok": True, "stdout": "x", "stderr": "", "exit_code": 0}
 
-    monkeypatch.setenv("CLI_MODE", "daytona")
-    monkeypatch.setenv("DAYTONA_API_KEY", "test-key")
+    monkeypatch.setenv("CLI_MODE", "modal")
     monkeypatch.setattr(cli, "read_file_remote", lambda p: calls.append(("read", p)) or ok)
     monkeypatch.setattr(
         cli, "write_file_remote", lambda p, c: calls.append(("write", p, c)) or ok
@@ -296,8 +458,7 @@ def test_executor_routes_file_tools_to_remote(monkeypatch):
 
 
 def test_workspace_files_uses_remote_listing(monkeypatch):
-    monkeypatch.setenv("CLI_MODE", "daytona")
-    monkeypatch.setenv("DAYTONA_API_KEY", "test-key")
+    monkeypatch.setenv("CLI_MODE", "modal")
     monkeypatch.setattr(
         cli,
         "list_files_remote",

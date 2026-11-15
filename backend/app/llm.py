@@ -1,11 +1,23 @@
 """Thin LLM client. OpenAI-compatible. Keys are intentionally empty by default.
 
 Set these in backend/.env to enable:
+    # Primary provider
     LLM_API_KEY=
     LLM_BASE_URL=https://api.openai.com/v1
     LLM_MODEL=gpt-4o-mini
+
+    # Fallback providers (tried in order when the previous one fails)
+    LLM_2_API_KEY=
+    LLM_2_BASE_URL=
+    LLM_2_MODEL=
+    LLM_3_API_KEY=
+    LLM_3_BASE_URL=
+    LLM_3_MODEL=
+
     LLM_TIMEOUT=120
     LLM_RETRIES=2
+
+Fallback base/model values are optional: empty values reuse the primary ones.
 """
 
 import json
@@ -15,23 +27,71 @@ import httpx
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
+MAX_FALLBACK_PROVIDERS = 3
+
+
+def _env(name: str) -> str:
+    return os.getenv(name, "").strip()
+
+
+def _global_base_url() -> str:
+    return _env("LLM_BASE_URL").rstrip("/") or DEFAULT_BASE_URL
+
+
+def _global_model() -> str:
+    return _env("LLM_MODEL") or DEFAULT_MODEL
+
+
+def providers() -> list[dict]:
+    """Configured endpoints: primary first, then numbered fallbacks.
+
+    Primary:   LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
+    Fallbacks: LLM_2_* ... LLM_3_* (LLM_1_* is accepted as an alias)
+
+    A provider is only used when its API key is set. Empty base/model values
+    inherit the primary ones, so a fallback can be just a key + model.
+    """
+    found: list[dict] = []
+
+    def add(name: str, key: str, base: str, model: str) -> None:
+        if not key:
+            return
+        base = (base or _global_base_url()).rstrip("/") or DEFAULT_BASE_URL
+        model = model or _global_model()
+        signature = (base, key, model)
+        if any((p["base_url"], p["api_key"], p["model"]) == signature for p in found):
+            return
+        found.append({"name": name, "base_url": base, "api_key": key, "model": model})
+
+    add("primary", _env("LLM_API_KEY"), _env("LLM_BASE_URL"), _env("LLM_MODEL"))
+    for index in range(1, MAX_FALLBACK_PROVIDERS + 1):
+        add(
+            f"LLM_{index}",
+            _env(f"LLM_{index}_API_KEY"),
+            _env(f"LLM_{index}_BASE_URL"),
+            _env(f"LLM_{index}_MODEL"),
+        )
+    return found
 
 
 def base_url() -> str:
-    return os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL).strip().rstrip("/")
+    found = providers()
+    return found[0]["base_url"] if found else _global_base_url()
 
 
 def api_key() -> str:
-    return os.getenv("LLM_API_KEY", "").strip()
+    found = providers()
+    return found[0]["api_key"] if found else ""
 
 
 def model() -> str:
-    return os.getenv("LLM_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    found = providers()
+    return found[0]["model"] if found else _global_model()
 
 
 def is_configured() -> bool:
-    """True when an API key is present. Kept empty until the user adds one."""
-    return bool(api_key())
+    """True when at least one provider has an API key."""
+    return bool(providers())
 
 
 def _extract_content(payload: dict) -> str:
@@ -51,41 +111,60 @@ def _extract_content(payload: dict) -> str:
 
 
 def chat(messages: list[dict], temperature: float = 0.2, timeout: float | None = None) -> str:
-    """Single completion call with bounded retries on transient failures."""
-    key = api_key()
-    if not key:
+    """Single completion with provider fallback and bounded retries.
+
+    Providers are tried in ``providers()`` order. A provider is abandoned after
+    its retries are exhausted (5xx/network) or immediately on a 4xx reply, then
+    the next provider is tried.
+    """
+    found = providers()
+    if not found:
         raise RuntimeError(
-            "LLM not configured. Add LLM_API_KEY (and LLM_MODEL) to backend/.env"
+            "LLM not configured. Add LLM_API_KEY (and LLM_2_API_KEY / "
+            "LLM_3_API_KEY for fallbacks) to backend/.env"
         )
 
     timeout = float(timeout or os.getenv("LLM_TIMEOUT", "120"))
     retries = max(0, int(os.getenv("LLM_RETRIES", "2")))
-    url = f"{base_url()}/chat/completions"
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    body = {"model": model(), "messages": messages, "temperature": temperature}
+    errors: list[str] = []
 
-    last_error: Exception | None = None
-    for attempt in range(retries + 1):
-        try:
-            resp = httpx.post(url, headers=headers, json=body, timeout=timeout)
-            if resp.status_code >= 500:
-                last_error = RuntimeError(f"LLM HTTP {resp.status_code}: {resp.text[:200]}")
-                continue
-            if resp.status_code >= 400:
-                # 4xx is not transient - fail fast with the provider's message.
-                detail = resp.text[:300]
-                try:
-                    detail = resp.json().get("error", {}).get("message", detail)
-                except Exception:  # noqa: BLE001
-                    pass
-                raise RuntimeError(f"LLM HTTP {resp.status_code}: {detail}")
-            return _extract_content(resp.json())
-        except RuntimeError:
-            raise
-        except Exception as exc:  # noqa: BLE001  (timeouts, connection resets)
-            last_error = exc
+    for provider in found:
+        url = f"{provider['base_url']}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {provider['api_key']}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": provider["model"],
+            "messages": messages,
+            "temperature": temperature,
+        }
 
-    raise RuntimeError(f"LLM call failed after {retries + 1} attempts: {last_error}")
+        last_error: Exception | str | None = None
+        for _ in range(retries + 1):
+            try:
+                resp = httpx.post(url, headers=headers, json=body, timeout=timeout)
+                if resp.status_code >= 500:
+                    last_error = RuntimeError(
+                        f"LLM HTTP {resp.status_code}: {resp.text[:200]}"
+                    )
+                    continue
+                if resp.status_code >= 400:
+                    # 4xx is not transient for this provider - try the next one.
+                    detail = resp.text[:300]
+                    try:
+                        detail = resp.json().get("error", {}).get("message", detail)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    last_error = RuntimeError(f"LLM HTTP {resp.status_code}: {detail}")
+                    break
+                return _extract_content(resp.json())
+            except Exception as exc:  # noqa: BLE001  (timeouts, connection resets)
+                last_error = exc
+
+        errors.append(f"{provider['name']} ({provider['model']}): {last_error}")
+
+    raise RuntimeError("all LLM providers failed: " + " | ".join(errors))
 
 
 def chat_json(messages: list[dict], **kw) -> dict:
@@ -103,9 +182,22 @@ def chat_json(messages: list[dict], **kw) -> dict:
 
 
 def status() -> dict:
-    """Redacted diagnostics for /health."""
+    """Redacted diagnostics for /health (never exposes API keys)."""
+    found = providers()
+    primary = found[0] if found else None
     return {
-        "configured": is_configured(),
-        "model": model(),
-        "base_url": base_url(),
+        "configured": bool(found),
+        "api_key_set": bool(primary),
+        "model": primary["model"] if primary else _global_model(),
+        "base_url": primary["base_url"] if primary else _global_base_url(),
+        "provider_count": len(found),
+        "providers": [
+            {
+                "name": provider["name"],
+                "base_url": provider["base_url"],
+                "model": provider["model"],
+                "api_key_set": bool(provider["api_key"]),
+            }
+            for provider in found
+        ],
     }

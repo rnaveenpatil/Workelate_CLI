@@ -13,16 +13,6 @@ def observe(result: dict) -> str:
     code = result.get("exit_code", "?")
     lines = [f"status={status} exit_code={code}"]
 
-    if result.get("status") is not None:
-        where = result.get("url", "")
-        ctype = result.get("content_type", "")
-        detail = f"http_status={result['status']}"
-        if ctype:
-            detail += f" content_type={ctype}"
-        if where:
-            detail += f" url={where}"
-        lines.append(detail)
-
     out = (result.get("stdout") or "").strip()
     err = (result.get("stderr") or "").strip()
 

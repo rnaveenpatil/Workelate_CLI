@@ -1,7 +1,7 @@
 """Workelate_CLI backend package.
 
 Loads ``backend/.env`` before any submodule reads ``os.environ``, so modules that
-snapshot configuration at import time (cli, executor, llm, crawler) actually see
+snapshot configuration at import time (cli, executor, llm) actually see
 the user's values.
 """
 

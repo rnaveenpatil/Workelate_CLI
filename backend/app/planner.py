@@ -12,15 +12,13 @@ import json
 import os
 import re
 
-from . import crawler, llm
+from . import llm
 
 TOOLS = (
     "run_command",
     "read_file",
     "write_file",
     "list_files",
-    "http_request",
-    "fetch_web",
     "done",
 )
 
@@ -44,15 +42,6 @@ ALIASES = {
     "list": "list_files",
     "listfiles": "list_files",
     "list_files_in_workspace": "list_files",
-    "http": "http_request",
-    "request": "http_request",
-    "curl": "http_request",
-    "api_call": "http_request",
-    "fetch": "fetch_web",
-    "web": "fetch_web",
-    "browse": "fetch_web",
-    "open_url": "fetch_web",
-    "read_page": "fetch_web",
     "finish": "done",
     "stop": "done",
     "answer": "done",
@@ -65,12 +54,10 @@ SPEC = {
     "read_file": ("path",),
     "write_file": ("path", "content"),
     "list_files": (),
-    "http_request": ("url",),
-    "fetch_web": ("url",),
     "done": (),
 }
 
-SYSTEM = """You are Workelate_CLI, an autonomous agent that operates a shell and the web \
+SYSTEM = """You are Workelate_CLI, an autonomous agent that operates a shell \
 inside the user's workspace. You work in a loop: you choose ONE action, you receive its \
 observation, then you choose the next action. You never ask the user to run things \
 yourself and you never describe what you would do - you act.
@@ -82,8 +69,6 @@ TOOLS
   read_file    {"tool":"read_file","path":"<workspace-relative path>","thought":"..."}
   write_file   {"tool":"write_file","path":"<workspace-relative path>","content":"<FULL new file text>","thought":"..."}
   list_files   {"tool":"list_files","prefix":"<optional prefix>","thought":"..."}
-  http_request {"tool":"http_request","url":"<http(s) url>","method":"GET|POST|PUT|PATCH|DELETE","headers":{},"body":"<optional>","thought":"..."}
-  fetch_web    {"tool":"fetch_web","url":"<http(s) url>","thought":"..."}   # returns page text
   done         {"tool":"done","outcome":"<final answer>","thought":"..."}
 
 HOW TO DECIDE THE NEXT ACTION
@@ -99,8 +84,10 @@ HARD RULES
 - Exactly one action per reply, valid JSON, listed tool name.
 - `write_file` must include the COMPLETE file content, not a diff or a placeholder.
 - Paths are workspace-relative. Never try to escape the workspace with `..` or absolute paths.
-- Use `run_command` for anything CLI-ish (git, npm, pip, python, tests, grep, curl).
-- Use `fetch_web` to READ a page; `http_request` to CALL an API or check a status code.
+- Use `run_command` for anything CLI-ish (git, npm, pip, python, tests, grep, curl, wget).
+- There is no separate web tool. To read a page or call an API, use `run_command`
+  with `curl`/`wget` (for example: `curl -sSL <url>` or
+  `curl -sS -o /dev/null -w '%{http_code}' <url>`).
 - Never repeat an action that already failed the same way - change the approach or the input.
 - Never re-issue an action that already succeeded; build on its observation.
 - Only call `done` when the goal is achieved, or when you are genuinely blocked.
@@ -247,14 +234,10 @@ def _fallback(goal: str, history: list[dict]) -> dict:
 
 
 def workspace_files() -> list[str]:
-    """Repo listing when GitHub is configured, else the local workspace walk."""
-    if crawler.is_configured():
-        files = crawler.list_files()
-        if files:
-            return files
+    """Grounding list from the terminal (remote sandbox or local workspace)."""
     try:
-        from .executor import workspace_files as local_files
+        from .executor import workspace_files as terminal_files
 
-        return local_files()
+        return terminal_files()
     except Exception:  # noqa: BLE001
         return []

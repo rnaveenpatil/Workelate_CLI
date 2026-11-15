@@ -6,7 +6,7 @@ Every branch returns the same result shape (``ok``/``exit_code``/``stdout``/
 
 import os
 
-from . import cli, crawler, web
+from . import cli
 
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", os.getcwd())
 
@@ -15,8 +15,6 @@ TOOLS = (
     "read_file",
     "write_file",
     "list_files",
-    "http_request",
-    "fetch_web",
 )
 
 MAX_READ = 8000
@@ -119,21 +117,6 @@ def execute(action: dict) -> dict:
             "stderr": "",
             "exit_code": 0,
         }
-
-    if tool == "http_request":
-        return web.http_request(
-            action.get("url", ""),
-            method=action.get("method", "GET"),
-            headers=action.get("headers") or {},
-            body=action.get("body"),
-            timeout=float(action.get("timeout", web.DEFAULT_TIMEOUT)),
-        )
-
-    if tool == "fetch_web":
-        return web.fetch_page(
-            action.get("url", ""),
-            timeout=float(action.get("timeout", web.DEFAULT_TIMEOUT)),
-        )
 
     return {"ok": False, "stdout": "", "stderr": f"unknown tool: {tool!r}", "exit_code": -1}
 

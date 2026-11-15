@@ -1,6 +1,7 @@
 # Workelate_CLI
 
 Minimal agent: **goal in → shell/file actions on the workspace → outcome out.**
+The only tool is the terminal — web access is done with `curl`/`wget` through it.
 
 ```
 frantend/            static UI (optional)
@@ -10,9 +11,8 @@ backend/
   app/schemas.py     request/response models
   app/agent.py       the loop: plan -> execute -> observe
   app/planner.py     picks next action (LLM if key set, else 1-step command)
-  app/executor.py    tools: run_command, read_file, write_file, list_files, http_request, fetch_web
-  app/cli.py         the terminal: local subprocess OR Daytona sandbox
-  app/crawler.py     read-only GitHub file listing (optional)
+  app/executor.py    tools: run_command, read_file, write_file, list_files
+  app/cli.py         the terminal: local subprocess OR Modal sandbox
   app/inspector.py   shrinks tool output for the next step
   app/llm.py         OpenAI-compatible client — API KEY LEFT EMPTY ON PURPOSE
 ```
@@ -21,10 +21,15 @@ backend/
 
 ```bash
 cd backend
-pip install -r requirements.txt
-cp .env.example .env          # keys stay empty
-uvicorn app.main:app --reload --port 8000
+python3 -m venv .venv                      # once
+.venv/bin/pip install -r requirements.txt  # once
+cp .env.example .env
+./run.sh                                   # 0.0.0.0:8000 with reload
 ```
+
+`run.sh` uses `.venv/bin/uvicorn app.main:app`. You can also run
+`.venv/bin/uvicorn main:app` from `backend/app`; the entrypoint inserts the
+backend root on `sys.path` so package-relative imports still work.
 
 ```bash
 curl localhost:8000/health
@@ -32,32 +37,76 @@ curl -X POST localhost:8000/task -H 'content-type: application/json' \
      -d '{"goal":"ls && git status","max_steps":3}'
 ```
 
-## Connect a Daytona sandbox
+## Frontend
 
-Install the SDK (already in `requirements.txt`) and set in `backend/.env`:
+The chat UI is served by the same backend at **http://localhost:8000/ui/**.
+
+It sends each message to `POST /task`, shows the agent's conclusion, and expands
+the execution log (tool, input, observation). It can also be opened directly from
+`frantend/index.html`; in that case it calls `http://localhost:8000` by default.
+Override the API URL with `?api=http://127.0.0.1:8000` or the **API** button.
+
+## Connect a Modal sandbox
+
+The SDK is already in `requirements.txt`. Authenticate once per machine:
+
+```bash
+cd backend
+.venv/bin/modal token set --profile=rnpvip685
+.venv/bin/modal profile activate rnpvip685
+```
+
+Publish the named image (for example `main`) in the `rnpvip685` workspace. If
+you have a Dockerfile:
+
+```bash
+.venv/bin/modal image build -t main . -e main
+```
+
+Then set in `backend/.env`:
 
 ```
-CLI_MODE=daytona
-DAYTONA_API_KEY=<project api key>
-DAYTONA_API_URL=https://app.daytona.io/api
-DAYTONA_SANDBOX_ID=raw-terml-test   # optional; empty = reuse a running one
-DAYTONA_WORKDIR=/home/daytona
+CLI_MODE=modal
+MODAL_PROFILE=rnpvip685
+MODAL_ENVIRONMENT=main
+MODAL_IMAGE=main
+MODAL_APP_NAME=workelate-cli
+MODAL_TIMEOUT=86400
+MODAL_IDLE_TIMEOUT=
+MODAL_WORKDIR=
 ```
 
 Every `run_command`, `read_file`, `write_file`, and `list_files` then runs inside
-that Daytona sandbox. When `DAYTONA_SANDBOX_ID` is empty the backend reuses a
-running sandbox or creates a new one.
+that Modal sandbox. The sandbox is cached per process and recreated automatically
+when it terminates. `MODAL_IMAGE` also accepts the dashboard URL
+`https://modal.com/images/rnpvip685/main`; the workspace segment is dropped.
+Modal sandboxes have outbound internet access, so use `curl`/`wget` through
+`run_command` for web access.
 
 With `CLI_MODE=local`, commands run in `WORKSPACE_DIR` on the same machine
 instead — the agent still works offline.
 
 ## LLM
 
-`LLM_API_KEY` is empty by default. With no key the planner runs the goal itself as
-a single shell command, so the stack is testable offline. To enable it later:
+Configure 1–3 providers in `backend/.env` (any OpenAI-compatible endpoints).
+The primary is tried first, then the numbered fallbacks:
 
 ```
-LLM_API_KEY=<your key>
+# Primary
 LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=<your key>
 LLM_MODEL=gpt-4o-mini
+
+# Fallbacks (empty BASE_URL/MODEL reuse the primary ones)
+LLM_2_API_KEY=<key>
+LLM_2_BASE_URL=
+LLM_2_MODEL=
+LLM_3_API_KEY=<key>
+LLM_3_BASE_URL=
+LLM_3_MODEL=
 ```
+
+If a provider fails after its retries (5xx/network) or returns a 4xx, the agent
+tries the next one. With no keys it runs the goal itself as a single shell
+command, so the stack is testable offline. Optional: `LLM_TEMPERATURE=0.2`,
+`LLM_TIMEOUT=120`, `LLM_RETRIES=2`.

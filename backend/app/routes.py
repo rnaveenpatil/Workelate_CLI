@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from . import agent, cli, crawler, executor, llm, planner
+from . import agent, cli, executor, llm, planner
 from .schemas import TaskRequest, TaskResult
 
 router = APIRouter()
@@ -16,7 +16,6 @@ def health() -> dict:
         "tools": list(planner.TOOLS),
         "terminal": cli.status(),
         "llm": llm.status(),
-        "github": crawler.status(),
     }
 
 
@@ -28,9 +27,7 @@ def tools() -> dict:
 
 @router.get("/files")
 def files(prefix: str = "") -> dict:
-    """GitHub listing when configured, otherwise a local workspace walk."""
-    if crawler.is_configured():
-        return {"source": "github", "files": crawler.list_files(prefix=prefix)}
+    """Workspace listing from the terminal (remote sandbox or local)."""
     listing = executor.workspace_files()
     if prefix:
         listing = [p for p in listing if p.startswith(prefix)]
