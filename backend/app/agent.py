@@ -64,7 +64,11 @@ def run_task(goal: str, max_steps: int | None = None, cwd: str | None = None) ->
                 Step(index=i, tool="done", input={}, observation=action.get("thought", ""))
             )
             summary = _summarize(
-                goal, history, proposed_outcome, completed=True, stopped="done"
+                goal,
+                history,
+                proposed_outcome,
+                completed=last_ok is not False,
+                stopped="done" if last_ok is not False else "last_action_failed",
             )
             return TaskResult(
                 ok=last_ok is not False, goal=goal, mode=mode, steps=steps,
