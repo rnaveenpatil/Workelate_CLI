@@ -1,8 +1,7 @@
 """LLM-driven conversation and workspace action planner.
 
-The model may answer, ask one necessary clarification, execute one terminal
-command, or finish after workspace work. Only terminal execution is exposed as
-a workspace tool; response/clarification are internal control actions.
+The model may answer, ask one necessary clarification, use workspace tools, or
+finish after workspace work. Response/clarification are internal control actions.
 """
 
 import json
@@ -44,7 +43,7 @@ conversation history. Decide what response is appropriate:
    result, use "clarify" and ask one focused question.
 3. If the user requests an operation on their workspace, use the appropriate
    workspace tool. Actually perform the work; do not merely describe commands.
-4. After workspace actions, use more run_command actions as needed. Use "done"
+4. After workspace actions, use further appropriate workspace actions as needed. Use "done"
    only when finished or genuinely blocked. Its outcome must explain the result
    in plain language, grounded in the execution observations.
 
