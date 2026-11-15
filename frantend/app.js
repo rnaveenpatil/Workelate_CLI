@@ -288,7 +288,7 @@ function addAssistantResult(data) {
   const bubble = el("div", "bubble");
   const meta = el("div", "meta");
   meta.append(badge(data.ok ? "completed" : "stopped", data.ok ? "ok" : "warn"));
-  meta.append(badge(data.mode === "llm" ? "llm planner" : "fallback"));
+  meta.append(badge(data.mode === "llm" ? "LLM" : "fallback"));
 
   const outcome = String(data.outcome || "(no outcome returned)");
   meta.append(copyButton(outcome));
@@ -459,6 +459,7 @@ for (const chip of document.querySelectorAll(".chip")) {
 
 autosize();
 updateSend();
+restoreConversation();
 checkHealth();
 setInterval(checkHealth, 45000);
 input.focus();
