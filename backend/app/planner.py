@@ -15,7 +15,7 @@ TOOLS = ("run_command", "done")
 ALIASES = {
     "shell": "run_command", "bash": "run_command", "command": "run_command",
     "exec": "run_command", "execute": "run_command", "terminal": "run_command",
-"finish": "done", "stop": "done",
+    "finish": "done", "stop": "done",
     "answer": "done", "final": "done",
 }
 
