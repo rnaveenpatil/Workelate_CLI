@@ -99,11 +99,11 @@ def next_action(
         return _fallback(goal, history)
 
     messages = [{"role": "system", "content": SYSTEM}]
-    for item in (conversation or [])[-20:]:
+    for item in (conversation or [])[-16:]:
         role = item.get("role")
         content = item.get("content")
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
-            messages.append({"role": role, "content": content[-12000:]})
+            messages.append({"role": role, "content": content[-4000:]})
 
     execution = (
         "\n".join(
