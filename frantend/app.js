@@ -290,13 +290,16 @@ function addAssistantResult(data) {
     bubble.append(el("div", "stop-reason", `stopped: ${data.stopped_because}`));
   }
 
-  const executed = Array.isArray(data.steps)
-    ? data.steps.filter((step) => step.tool !== "done")
-    : [];
+  // Keep the complete backend trace visible. Do not discard the final
+  // "done" entry: the execution log should match the API response exactly.
+  const steps = Array.isArray(data.steps) ? data.steps.filter(Boolean) : [];
+  const executed = steps.filter((step) => step.tool !== "done");
 
   if (executed.length) {
     bubble.append(el("pre", "command-preview", executed.map(actionLabel).join("\n")));
-    bubble.append(buildSteps(executed, true));
+  }
+  if (steps.length) {
+    bubble.append(buildSteps(steps, true));
   }
 
   wrap.append(bubble);
