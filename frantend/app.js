@@ -129,14 +129,14 @@ async function checkHealth() {
     if (mode !== "local") {
       bits.push(terminal.configured ? "sandbox configured" : "sandbox not configured");
     }
-    bits.push(llm.configured ? `LLM ${llm.model || "on"}` : "LLM off · commands only");
+    bits.push(llm.configured ? `LLM ${llm.model || "on"}` : "LLM off · agent disabled");
 
     setStatus("online", bits.join(" · "));
     statusEl.title = `Backend: ${apiLabel()}`;
 
     emptyTip.textContent = llm.configured
       ? `Connected to ${apiLabel()}. Ask in plain English or type a command.`
-      : `Connected to ${apiLabel()} · configure an LLM key to enable natural-language terminal tasks. No command will run without it.`;
+      : `Connected to ${apiLabel()} · configure an LLM key to enable conversation and workspace actions. No action will run without it.`;
   } catch (err) {
     setStatus("offline", "backend offline");
     statusEl.title = String((err && err.message) || err);
