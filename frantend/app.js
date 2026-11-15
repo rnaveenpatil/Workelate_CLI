@@ -6,6 +6,7 @@ const chat = $("chat");
 const empty = $("empty");
 const emptyTip = $("emptyTip");
 const messages = [];
+const conversation = [];
 const form = $("form");
 const input = $("input");
 const sendBtn = $("send");
@@ -67,6 +68,7 @@ function showEmpty() {
   empty.hidden = false;
   for (const node of chat.querySelectorAll(".msg")) node.remove();
   messages.length = 0;
+  conversation.length = 0;
   chat.scrollTop = 0;
 }
 
@@ -338,17 +340,21 @@ async function sendGoal(goal) {
   maxStepsEl.value = String(maxSteps);
 
   try {
+    const priorConversation = conversation.slice(-20);
     const data = await fetchJSON(
       "/task",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ goal: text, max_steps: maxSteps }),
+        body: JSON.stringify({ goal: text, max_steps: maxSteps, conversation: priorConversation }),
       },
       10 * 60 * 1000
     );
     pending.remove();
     addAssistantResult(data);
+    conversation.push({ role: "user", content: text });
+    conversation.push({ role: "assistant", content: String(data.outcome || "") });
+    if (conversation.length > 20) conversation.splice(0, conversation.length - 20);
   } catch (err) {
     pending.remove();
     addError(err, text);
