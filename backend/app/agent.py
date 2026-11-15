@@ -30,6 +30,7 @@ def run_task(goal: str, max_steps: int | None = None, cwd: str | None = None) ->
     failures: dict[str, int] = {}
     stopped = "max_steps_reached"
     hint: str | None = None
+    last_ok: bool | None = None
 
     for i in range(1, limit + 1):
         action = None
@@ -59,8 +60,14 @@ def run_task(goal: str, max_steps: int | None = None, cwd: str | None = None) ->
             steps.append(
                 Step(index=i, tool="done", input={}, observation=action.get("thought", ""))
             )
+            ok = not (mode == "fallback" and last_ok is False)
             return TaskResult(
-                ok=True, goal=goal, mode=mode, steps=steps, outcome=outcome, stopped_because="done"
+                ok=ok,
+                goal=goal,
+                mode=mode,
+                steps=steps,
+                outcome=outcome,
+                stopped_because="done" if ok else "fallback_command_failed",
             )
 
         # Detect the model spinning on the same action.
@@ -80,6 +87,7 @@ def run_task(goal: str, max_steps: int | None = None, cwd: str | None = None) ->
             action.setdefault("cwd", cwd)
 
         result = executor.execute(action)
+        last_ok = bool(result.get("ok"))
         observation = inspector.observe(result)
 
         history.append(

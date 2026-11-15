@@ -10,7 +10,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import agent, executor, inspector, llm, planner, web  # noqa: E402
+from app import agent, cli, executor, inspector, llm, planner, web  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _local_terminal(monkeypatch):
+    """Keep tests hermetic: never talk to the real remote terminal."""
+    monkeypatch.setenv("CLI_MODE", "local")
+    monkeypatch.delenv("SANDBOX_CONTAINER", raising=False)
 
 
 # --------------------------- planner.parse_action ---------------------------
@@ -142,8 +149,9 @@ def test_observe_handles_failure_and_empty():
 # ------------------------------- agent loop --------------------------------
 
 
-def test_agent_end_to_end_with_scripted_planner(monkeypatch):
+def test_agent_end_to_end_with_scripted_planner(monkeypatch, tmp_path):
     """Full loop: 3 actions then done, driven by a fake LLM."""
+    monkeypatch.setattr(executor, "WORKSPACE_DIR", str(tmp_path))
     script = [
         {"tool": "list_files"},
         {"tool": "write_file", "path": "out.txt", "content": "hello"},
@@ -200,6 +208,7 @@ def test_agent_stops_when_repeating_failing_action(monkeypatch):
     monkeypatch.setattr(planner, "next_action", always_same)
     monkeypatch.setattr(planner, "workspace_files", lambda: [])
     monkeypatch.setattr(llm, "is_configured", lambda: True)
+    monkeypatch.setenv("CLI_MODE", "local")
 
     result = agent.run_task("fail forever", max_steps=3)
     assert result.ok is False
@@ -210,6 +219,93 @@ def test_agent_stops_when_repeating_failing_action(monkeypatch):
 
 def test_agent_fallback_mode_without_llm(monkeypatch):
     monkeypatch.setattr(llm, "is_configured", lambda: False)
+    monkeypatch.setenv("CLI_MODE", "local")
     result = agent.run_task("echo fallback-ok", max_steps=3)
     assert result.mode == "fallback"
     assert "fallback-ok" in result.outcome or result.ok is False
+
+
+def test_agent_fallback_reports_failed_command(monkeypatch):
+    monkeypatch.setattr(llm, "is_configured", lambda: False)
+    monkeypatch.setenv("CLI_MODE", "local")
+    result = agent.run_task("exit 3", max_steps=3)
+    assert result.ok is False
+    assert result.stopped_because == "fallback_command_failed"
+
+
+# ------------------------------ remote terminal -----------------------------
+
+
+def test_remote_headers_carry_both_tokens(monkeypatch):
+    monkeypatch.setenv("CLI_TOKEN", "shared")
+    monkeypatch.setenv("CLI_GITHUB_TOKEN", "ghu_test")
+    assert cli._headers() == {"X-CLI-Token": "shared", "X-Github-Token": "ghu_test"}
+
+
+def test_sandbox_wraps_remote_commands(monkeypatch):
+    captured: dict = {}
+
+    def fake_remote(command, cwd=None, timeout=120):
+        captured.update(command=command, cwd=cwd, timeout=timeout)
+        return {"ok": True, "exit_code": 0, "stdout": "hi", "stderr": ""}
+
+    monkeypatch.setenv("CLI_MODE", "remote")
+    monkeypatch.setenv("SANDBOX_CONTAINER", "agent-sandbox")
+    monkeypatch.setenv("SANDBOX_WORKDIR", "/workspace")
+    monkeypatch.setenv("SANDBOX_USER", "1000:1000")
+    monkeypatch.setattr(cli, "run_remote", fake_remote)
+
+    result = cli.run("echo hi && ls", cwd="/workspaces/Workelate_CLI")
+    assert result["ok"] is True
+    assert "docker exec" in captured["command"]
+    assert "agent-sandbox" in captured["command"]
+    assert "--user 1000:1000" in captured["command"]
+    assert "echo hi" in captured["command"]
+    assert captured["cwd"] is None
+
+
+def test_executor_routes_file_tools_to_remote(monkeypatch):
+    calls: list[tuple] = []
+    ok = {"ok": True, "stdout": "x", "stderr": "", "exit_code": 0}
+
+    monkeypatch.setenv("CLI_MODE", "remote")
+    monkeypatch.setattr(cli, "read_file_remote", lambda p: calls.append(("read", p)) or ok)
+    monkeypatch.setattr(
+        cli, "write_file_remote", lambda p, c: calls.append(("write", p, c)) or ok
+    )
+    monkeypatch.setattr(cli, "list_files_remote", lambda prefix="": calls.append(("list", prefix)) or ok)
+
+    executor.execute({"tool": "read_file", "path": "a.txt"})
+    executor.execute({"tool": "write_file", "path": "a.txt", "content": "body"})
+    executor.execute({"tool": "list_files"})
+    assert calls == [("read", "a.txt"), ("write", "a.txt", "body"), ("list", "")]
+
+
+def test_workspace_files_uses_remote_listing(monkeypatch):
+    monkeypatch.setenv("CLI_MODE", "remote")
+    monkeypatch.setattr(
+        cli,
+        "list_files_remote",
+        lambda prefix="": {"ok": True, "stdout": "a.txt\nb.txt", "stderr": "", "exit_code": 0},
+    )
+    assert executor.workspace_files() == ["a.txt", "b.txt"]
+
+
+def test_remote_private_port_returns_actionable_error(monkeypatch):
+    class FakeResponse:
+        status_code = 401
+        is_redirect = False
+        headers = {"www-authenticate": "tunnel"}
+        text = ""
+
+        def json(self):
+            return {}
+
+    monkeypatch.setenv("CLI_REMOTE_URL", "https://example-8000.app.github.dev")
+    monkeypatch.setenv("CLI_GITHUB_TOKEN", "")
+    monkeypatch.setattr(cli.httpx, "post", lambda *a, **k: FakeResponse())
+
+    result = cli.run_remote("echo hi")
+    assert result["ok"] is False
+    assert "CLI_GITHUB_TOKEN" in result["stderr"]
+    assert "private" in result["stderr"].lower()
