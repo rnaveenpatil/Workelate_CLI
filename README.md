@@ -9,8 +9,8 @@ backend/
   app/main.py        FastAPI entrypoint
   app/routes.py      /health  /files  /task
   app/schemas.py     request/response models
-  app/agent.py       the loop: plan -> execute -> observe
-  app/planner.py     picks next action (LLM if key set, else 1-step command)
+  app/agent.py       the loop plus final user-facing summarisation
+  app/planner.py     picks the next action using the configured LLM
   app/executor.py    tools: run_command, read_file, write_file, list_files
   app/cli.py         the terminal: local subprocess OR Modal sandbox
   app/inspector.py   shrinks tool output for the next step
@@ -41,8 +41,10 @@ curl -X POST localhost:8000/task -H 'content-type: application/json' \
 
 The chat UI is served by the same backend at **http://localhost:8000/ui/**.
 
-It sends each message to `POST /task`, shows the agent's conclusion, and expands
-the execution log (tool, input, observation). It can also be opened directly from
+It sends each message to `POST /task`, shows a concise user-facing summary, and keeps
+the actual commands, inputs, and raw terminal observations in the expandable execution log.
+The final summary is generated from the execution trace; if synthesis fails, a deterministic
+report is used instead. It can also be opened directly from
 `frantend/index.html`; in that case it calls `http://localhost:8000` by default.
 Override the API URL with `?api=http://127.0.0.1:8000` or the **API** button.
 
@@ -107,6 +109,7 @@ LLM_3_MODEL=
 ```
 
 If a provider fails after its retries (5xx/network) or returns a 4xx, the agent
-tries the next one. With no keys it runs the goal itself as a single shell
-command, so the stack is testable offline. Optional: `LLM_TEMPERATURE=0.2`,
+tries the next one. An LLM key is required for natural-language requests. Without one, the agent refuses
+to execute the request rather than treating an English sentence as a shell command.
+This prevents accidental or confusing terminal execution. Optional: `LLM_TEMPERATURE=0.2`,
 `LLM_TIMEOUT=120`, `LLM_RETRIES=2`.
