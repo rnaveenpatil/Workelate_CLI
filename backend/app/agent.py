@@ -129,7 +129,13 @@ def run_task(
             )
         hint = " ".join(hints) or None
 
-    summary = _summarize(goal, history, "", completed=False, stopped=stopped)
+    if not history:
+        summary = (
+            "I could not make progress because the planner did not produce a usable "
+            f"decision. Reason: {stopped}. No workspace action was executed."
+        )
+    else:
+        summary = _summarize(goal, history, "", completed=False, stopped=stopped)
     return TaskResult(
         ok=False, goal=goal, mode=mode, steps=steps, outcome=summary, stopped_because=stopped
     )
@@ -221,5 +227,5 @@ def _error_key(result: dict) -> str:
 
 
 def _brief(action: dict) -> dict:
-    keep = ("tool", "command", "cwd", "timeout")
+    keep = ("tool", "command", "cwd", "timeout", "path", "prefix")
     return {k: v for k, v in action.items() if k in keep}
