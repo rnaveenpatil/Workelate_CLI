@@ -10,24 +10,17 @@ import re
 
 from . import llm
 
-TOOLS = ("run_command", "read_file", "write_file", "list_files", "done")
+TOOLS = ("run_command", "done")
 
 ALIASES = {
     "shell": "run_command", "bash": "run_command", "command": "run_command",
     "exec": "run_command", "execute": "run_command", "terminal": "run_command",
-    "read": "read_file", "cat": "read_file", "readfile": "read_file",
-    "read_file_lines": "read_file", "write": "write_file",
-    "create_file": "write_file", "save_file": "write_file", "edit_file": "write_file",
-    "ls": "list_files", "list": "list_files", "listfiles": "list_files",
-    "list_files_in_workspace": "list_files", "finish": "done", "stop": "done",
+"finish": "done", "stop": "done",
     "answer": "done", "final": "done",
 }
 
 SPEC = {
     "run_command": ("command",),
-    "read_file": ("path",),
-    "write_file": ("path", "content"),
-    "list_files": (),
     "done": (),
 }
 
@@ -75,11 +68,12 @@ UNDERSTAND AND COMMUNICATE
 - Never claim success without evidence. Mention relevant paths, commands, and test
   outcomes only when they appear in the execution history.
 
-AVAILABLE TOOLS
-  run_command  {"tool":"run_command","command":"<shell>","cwd":"<optional>","timeout":<sec>,"thought":"..."}
-  read_file    {"tool":"read_file","path":"<workspace-relative path>","thought":"..."}
-  write_file   {"tool":"write_file","path":"<workspace-relative path>","content":"<FULL file text>","thought":"..."}
-  list_files   {"tool":"list_files","prefix":"<optional prefix>","thought":"..."}
+AVAILABLE TOOL
+  run_command  {"tool":"run_command","command":"<shell command>","cwd":"<optional>","timeout":<sec>,"thought":"..."}
+
+Use this one terminal tool for all workspace operations: inspect with ls/find/grep/cat,
+edit with a suitable shell utility or Python script, and run tests/builds as needed.
+To finish, answer directly using the special done action:
   done         {"tool":"done","outcome":"<user-facing answer/report>","needs_clarification":false,"thought":"..."}
 
 HOW TO WORK
@@ -106,7 +100,6 @@ SAFETY AND ACCURACY
 - Paths must remain inside the workspace. Never use ".." or absolute paths to escape it.
 - Use run_command for CLI work (git, tests, package managers, build tools, grep, curl).
   There is no separate web tool; use curl/wget through the terminal when appropriate.
-- write_file requires the COMPLETE file content, not a diff or placeholder.
 - Never repeat an action that already succeeded. Build on its observation.
 - Exactly one action per reply, valid JSON, and a listed tool name.
 - Call "done" when the request is answered, achieved, needs clarification, or is blocked.
