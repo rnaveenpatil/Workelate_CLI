@@ -1,4 +1,4 @@
-"""Workelate_CLI agent: goal -> actions on the workspace terminal -> user-facing result."""
+"""Workelate_CLI agent: understand -> answer or act -> explain the result."""
 
 import json
 import os
@@ -15,19 +15,22 @@ def run_task(goal: str, max_steps: int | None = None, cwd: str | None = None) ->
     limit = max_steps or MAX_STEPS
     mode = "llm" if llm.is_configured() else "fallback"
 
-    # Never pass a natural-language goal directly to bash as a fallback.
+    # The model must decide whether this is answer-only or workspace work. Without
+    # a model, do not guess from keywords or execute the user's natural language.
     if mode == "fallback":
         return TaskResult(
             ok=False, goal=goal, mode=mode, steps=[],
             outcome=(
-                "I couldn't execute this request because no language model is configured. "
-                "Add an LLM API key in backend/.env to enable natural-language planning. "
-                "No terminal command was run."
+                "I can't determine whether this request needs an answer or workspace "
+                "actions because no language model is configured. Add an LLM API key "
+                "in backend/.env. No terminal command was run."
             ),
             stopped_because="llm_not_configured",
         )
 
-    files = planner.workspace_files()
+    # Do not eagerly list the workspace: direct questions should not incur terminal
+    # latency or expose workspace metadata. The model can request list_files itself.
+    files: list[str] = []
     steps: list[Step] = []
     history: list[dict] = []
     signatures: list[str] = []
@@ -44,8 +47,8 @@ def run_task(goal: str, max_steps: int | None = None, cwd: str | None = None) ->
                 break
             except planner.PlannerError as exc:
                 hint = (
-                    f"your previous reply was unusable ({exc}). "
-                    "Reply with ONE valid JSON object using a listed tool."
+                    f"Your previous reply was unusable ({exc}). Return ONE valid JSON "
+                    "object using a listed tool. Decide whether to answer, clarify, or act."
                 )
             except Exception as exc:  # noqa: BLE001
                 stopped = f"planner_error: {exc}"
@@ -60,13 +63,26 @@ def run_task(goal: str, max_steps: int | None = None, cwd: str | None = None) ->
         tool = action.get("tool", "")
         if tool == "done":
             proposed_outcome = str(action.get("outcome") or "").strip()
+            needs_clarification = bool(action.get("needs_clarification", False))
             steps.append(
-                Step(index=i, tool="done", input={}, observation=action.get("thought", ""))
+                Step(index=i, tool="done", input={"needs_clarification": needs_clarification},
+                     observation=action.get("thought", ""))
             )
+
+            # For a direct answer or clarification, return the model's answer as-is.
+            # No extra summarization call and no unnecessary terminal action.
+            if not history:
+                return TaskResult(
+                    ok=True, goal=goal, mode=mode, steps=steps,
+                    outcome=proposed_outcome or (
+                        "I need one more detail before I can proceed."
+                        if needs_clarification else "I couldn't produce an answer."
+                    ),
+                    stopped_because="clarification_required" if needs_clarification else "done",
+                )
+
             summary = _summarize(
-                goal,
-                history,
-                proposed_outcome,
+                goal, history, proposed_outcome,
                 completed=last_ok is not False,
                 stopped="done" if last_ok is not False else "last_action_failed",
             )
@@ -84,8 +100,8 @@ def run_task(goal: str, max_steps: int | None = None, cwd: str | None = None) ->
         hints: list[str] = []
         if repeats >= LOOP_LIMIT and sig == signatures[-1]:
             hints.append(
-                f"you have chosen this exact action {repeats} times. "
-                "Do something different, or call done with what you know."
+                f"You chose this exact action {repeats} times. Choose a different "
+                "approach or finish with the evidence you have."
             )
 
         if cwd and tool == "run_command":
@@ -105,14 +121,12 @@ def run_task(goal: str, max_steps: int | None = None, cwd: str | None = None) ->
             times = failures[error_key]
             seen = "" if times == 1 else f" (this exact failure has now happened {times} times)"
             hints.append(
-                f"the last {tool} call FAILED{seen}: {error_key}. "
-                "Diagnose it from the observation and change the approach - do not repeat it."
+                f"The last {tool} call FAILED{seen}: {error_key}. Diagnose from the "
+                "observation and change the approach; do not repeat it unchanged."
             )
         hint = " ".join(hints) or None
 
-    summary = _summarize(
-        goal, history, "", completed=False, stopped=stopped
-    )
+    summary = _summarize(goal, history, "", completed=False, stopped=stopped)
     return TaskResult(
         ok=False, goal=goal, mode=mode, steps=steps, outcome=summary, stopped_because=stopped
     )
@@ -126,12 +140,10 @@ def _summarize(
     completed: bool,
     stopped: str,
 ) -> str:
-    """Synthesize a clear report while retaining raw evidence in the execution log."""
+    """Explain workspace work using observed evidence; keep raw output in the log."""
     trace = [
         {
-            "step": item["index"],
-            "tool": item["tool"],
-            "input": item["input"],
+            "step": item["index"], "tool": item["tool"], "input": item["input"],
             "result": item["observation"][:2500],
         }
         for item in history[-12:]
@@ -140,20 +152,19 @@ def _summarize(
         trace.append({"agent_final_note": proposed_outcome[:3000]})
     status = (
         "The agent reached its done action."
-        if completed
-        else f"The agent stopped before confirming completion ({stopped})."
+        if completed else f"The agent stopped before confirming completion ({stopped})."
     )
     messages = [
         {
             "role": "system",
             "content": (
-                "You write the final user-facing report for a terminal automation agent. "
-                "Use ONLY the supplied goal and execution trace. Never invent commands, "
-                "file changes, test results, or success. Distinguish completed work from "
-                "attempted or incomplete work. If a command failed, say what failed and "
-                "whether it was later resolved. Do not dump raw JSON, stdout, or stderr. "
-                "Write concise plain Markdown: outcome first, then what was actually done, "
-                "verification/results, and any remaining blocker. Mention paths and command "
+                "You write the final user-facing report for a workspace automation agent. "
+                "Use ONLY the supplied goal and execution trace. Begin by briefly explaining "
+                "what you understood the user wanted. Then state what you actually did and "
+                "the evidence/results. Clearly separate completed work, attempted work, and "
+                "remaining blockers. Never invent commands, file changes, tests, or success. "
+                "If a command failed, say whether it was later resolved. Do not dump raw JSON, "
+                "stdout, or stderr. Write concise plain Markdown. Mention paths and command "
                 "results only when evidenced. If evidence is insufficient, say so."
             ),
         },
@@ -169,7 +180,7 @@ def _summarize(
         report = llm.chat(messages, temperature=0.1, timeout=45).strip()
         if report:
             return report
-    except Exception:  # noqa: BLE001 - reporting must not discard execution results
+    except Exception:  # noqa: BLE001
         pass
     return _deterministic_summary(goal, history, completed, stopped)
 
@@ -189,7 +200,7 @@ def _deterministic_summary(goal: str, history: list[dict], completed: bool, stop
         "The agent reached its completion step."
         if completed else f"The request was not confirmed complete (stopped: {stopped})."
     )
-    lines = [heading, "", f"**Request:** {goal}"]
+    lines = [heading, "", f"**What I understood:** {goal}"]
     if actions:
         lines.extend(["", "**Actions executed:**", *actions])
     else:
