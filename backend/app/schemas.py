@@ -7,14 +7,14 @@ from pydantic import BaseModel, Field
 
 class ConversationMessage(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(..., min_length=1, max_length=4000)
+    content: str = Field(..., min_length=1, max_length=20000)
 
 
 class TaskRequest(BaseModel):
     goal: str = Field(..., min_length=1, description="What the user wants done")
     max_steps: int = Field(8, ge=1, le=25)
     cwd: str | None = None
-    conversation: list[ConversationMessage] = Field(default_factory=list, max_length=16)
+    conversation: list[ConversationMessage] = Field(default_factory=list, max_length=1000)
 
 
 class Step(BaseModel):

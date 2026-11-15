@@ -20,7 +20,7 @@ def _local_terminal(monkeypatch):
     monkeypatch.setenv("CLI_MODE", "local")
     monkeypatch.delenv("SANDBOX_CONTAINER", raising=False)
     cli._reset_modal_cache()
-    for prefix in ("", "_1", "_2", "_3"):
+    for prefix in ("", "_1", "_2", "_3", "_4"):
         for suffix in ("API_KEY", "BASE_URL", "MODEL"):
             monkeypatch.delenv(f"LLM{prefix}_{suffix}", raising=False)
 
@@ -81,6 +81,22 @@ def test_llm_providers_inherit_primary_base_and_model(monkeypatch):
     assert "api_key" not in status["providers"][0]
 
 
+def test_llm_providers_include_fourth_fallback(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://primary.example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "key-1")
+    monkeypatch.setenv("LLM_MODEL", "model-1")
+    for index, host in ((2, "second"), (3, "third"), (4, "fourth")):
+        monkeypatch.setenv(f"LLM_{index}_BASE_URL", f"https://{host}.example/v1")
+        monkeypatch.setenv(f"LLM_{index}_API_KEY", f"key-{index}")
+        monkeypatch.setenv(f"LLM_{index}_MODEL", f"model-{index}")
+
+    found = llm.providers()
+    assert [p["name"] for p in found] == ["primary", "LLM_2", "LLM_3", "LLM_4"]
+    assert found[3]["base_url"] == "https://fourth.example/v1"
+    assert found[3]["model"] == "model-4"
+    assert llm.status()["provider_count"] == 4
+
+
 class _FakeResponse:
     def __init__(self, status_code, payload=None):
         self.status_code = status_code
@@ -134,6 +150,33 @@ def test_llm_falls_back_after_4xx(monkeypatch):
     assert len(calls) == 2
 
 
+def test_llm_falls_back_to_fourth_provider(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://primary.example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "key-1")
+    monkeypatch.setenv("LLM_MODEL", "model-1")
+    for index, host in ((2, "second"), (3, "third"), (4, "fourth")):
+        monkeypatch.setenv(f"LLM_{index}_BASE_URL", f"https://{host}.example/v1")
+        monkeypatch.setenv(f"LLM_{index}_API_KEY", f"key-{index}")
+        monkeypatch.setenv(f"LLM_{index}_MODEL", f"model-{index}")
+    monkeypatch.setenv("LLM_RETRIES", "0")
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(url)
+        if "fourth" in url:
+            return _FakeResponse(200, {"choices": [{"message": {"content": "fourth-ok"}}]})
+        return _FakeResponse(503, {"error": {"message": "down"}})
+
+    monkeypatch.setattr(llm.httpx, "post", fake_post)
+    assert llm.chat([{"role": "user", "content": "hi"}]) == "fourth-ok"
+    assert calls == [
+        "https://primary.example/v1/chat/completions",
+        "https://second.example/v1/chat/completions",
+        "https://third.example/v1/chat/completions",
+        "https://fourth.example/v1/chat/completions",
+    ]
+
+
 def test_llm_all_providers_fail_reports_each(monkeypatch):
     _mock_two_providers(monkeypatch)
 
@@ -174,7 +217,7 @@ def test_parse_nested_braces_and_braces_in_strings():
 
 def test_parse_alias_and_alternate_key_names():
     assert planner.parse_action('{"tool":"shell","command":"pwd"}')["tool"] == "run_command"
-    assert planner.parse_action('{"name":"ls"}')["tool"] == "list_files"
+    assert planner.parse_action('{"name":"list_files"}')["tool"] == "list_files"
     assert planner.parse_action('{"action":"finish","outcome":"ok"}')["tool"] == "done"
 
 
@@ -191,19 +234,14 @@ def test_parse_rejects_missing_required_fields():
 
 
 def test_agent_toolset_is_terminal_only():
-    assert planner.TOOLS == (
-        "run_command",
-        "read_file",
-        "write_file",
-        "list_files",
-        "done",
-    )
-    assert executor.TOOLS == (
+    assert planner.WORKSPACE_TOOLS == (
         "run_command",
         "read_file",
         "write_file",
         "list_files",
     )
+    assert planner.TOOLS == (*planner.WORKSPACE_TOOLS, "respond", "clarify", "done")
+    assert executor.TOOLS == planner.WORKSPACE_TOOLS
     for name in ("http_request", "fetch_web"):
         assert name not in planner.TOOLS
         assert name not in executor.TOOLS
@@ -334,7 +372,7 @@ def test_agent_stops_when_repeating_failing_action(monkeypatch):
     assert result.ok is False
     assert result.stopped_because == "max_steps_reached"
     assert any(h and "exact action" in h for h in hints)
-    assert any(h and "FAILED" in h for h in hints)
+    assert any(h and "failed" in h.lower() for h in hints)
 
 
 def test_agent_fallback_mode_without_llm(monkeypatch):

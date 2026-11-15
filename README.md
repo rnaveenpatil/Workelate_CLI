@@ -90,7 +90,7 @@ instead — the agent still works offline.
 
 ## LLM
 
-Configure 1–3 providers in `backend/.env` (any OpenAI-compatible endpoints).
+Configure 1–4 providers in `backend/.env` (any OpenAI-compatible endpoints).
 The primary is tried first, then the numbered fallbacks:
 
 ```
@@ -106,6 +106,9 @@ LLM_2_MODEL=
 LLM_3_API_KEY=<key>
 LLM_3_BASE_URL=
 LLM_3_MODEL=
+LLM_4_API_KEY=<key>
+LLM_4_BASE_URL=
+LLM_4_MODEL=
 ```
 
 If a provider fails after its retries (5xx/network) or returns a 4xx, the agent

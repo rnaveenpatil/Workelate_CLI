@@ -15,6 +15,7 @@ const statusEl = $("status");
 const statusText = $("statusText");
 const maxStepsEl = $("maxSteps");
 const apiBtn = $("apiBtn");
+const SESSION_HISTORY_LIMIT = 1000;
 
 let busy = false;
 
@@ -70,6 +71,19 @@ function showEmpty() {
   messages.length = 0;
   conversation.length = 0;
   chat.scrollTop = 0;
+}
+
+function remember(role, content) {
+  conversation.push({ role, content: String(content || "") });
+  if (conversation.length > SESSION_HISTORY_LIMIT) {
+    conversation.splice(0, conversation.length - SESSION_HISTORY_LIMIT);
+  }
+}
+
+function errorText(err) {
+  return err && err.name === "AbortError"
+    ? "The request timed out before the agent finished."
+    : String((err && err.message) || err);
 }
 
 function autosize() {
@@ -201,6 +215,14 @@ function inputBody(input) {
   return JSON.stringify(input, null, 2);
 }
 
+function actionLabel(step) {
+  const input = step.input || {};
+  if (input.command) return `$ ${input.command}`;
+  if (input.path) return `${step.tool || "file"} ${input.path}`;
+  if (input.prefix) return `${step.tool || "list_files"} ${input.prefix}`;
+  return step.tool || "action";
+}
+
 function buildSteps(steps, open) {
   const details = el("details", "steps");
   if (open) details.open = true;
@@ -268,8 +290,13 @@ function addAssistantResult(data) {
     bubble.append(el("div", "stop-reason", `stopped: ${data.stopped_because}`));
   }
 
-  if (Array.isArray(data.steps) && data.steps.length) {
-    bubble.append(buildSteps(data.steps, !data.ok));
+  const executed = Array.isArray(data.steps)
+    ? data.steps.filter((step) => step.tool !== "done")
+    : [];
+
+  if (executed.length) {
+    bubble.append(el("pre", "command-preview", executed.map(actionLabel).join("\n")));
+    bubble.append(buildSteps(executed, true));
   }
 
   wrap.append(bubble);
@@ -285,11 +312,7 @@ function addError(err, goal) {
   const bubble = el("div", "bubble error-box");
   bubble.append(el("div", "err-title", "Could not reach the backend agent"));
 
-  const message =
-    err && err.name === "AbortError"
-      ? "The request timed out before the agent finished."
-      : String((err && err.message) || err);
-  bubble.append(el("div", "", message));
+  bubble.append(el("div", "", errorText(err)));
 
   const help = el("div", "err-help");
   help.append(document.createTextNode("Check that uvicorn is running on "));
@@ -340,23 +363,27 @@ async function sendGoal(goal) {
   maxStepsEl.value = String(maxSteps);
 
   try {
-    const priorConversation = conversation.slice(-16);
     const data = await fetchJSON(
       "/task",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ goal: text, max_steps: maxSteps, conversation: priorConversation }),
+        body: JSON.stringify({
+          goal: text,
+          max_steps: maxSteps,
+          conversation: conversation.slice(-SESSION_HISTORY_LIMIT),
+        }),
       },
       10 * 60 * 1000
     );
     pending.remove();
     addAssistantResult(data);
-    conversation.push({ role: "user", content: text });
-    conversation.push({ role: "assistant", content: String(data.outcome || "") });
-    if (conversation.length > 16) conversation.splice(0, conversation.length - 16);
+    remember("user", text);
+    remember("assistant", data.outcome || "");
   } catch (err) {
     pending.remove();
+    remember("user", text);
+    remember("assistant", `Request failed: ${errorText(err)}`);
     addError(err, text);
   } finally {
     busy = false;

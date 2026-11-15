@@ -90,7 +90,7 @@ agent still works.
 ## LLM
 
 Configured entirely through `backend/.env` (any OpenAI-compatible endpoint).
-The primary is tried first, then `LLM_2_*` and `LLM_3_*` fallbacks in order:
+The primary is tried first, then `LLM_2_*` through `LLM_4_*` fallbacks in order:
 
 ```
 # Primary
@@ -107,6 +107,11 @@ LLM_2_MODEL=
 LLM_3_API_KEY=<key>
 LLM_3_BASE_URL=
 LLM_3_MODEL=
+
+# Fallback 4
+LLM_4_API_KEY=<key>
+LLM_4_BASE_URL=
+LLM_4_MODEL=
 
 LLM_TEMPERATURE=0.2     # optional
 LLM_TIMEOUT=120         # optional
@@ -143,6 +148,9 @@ and model without exposing keys.
 | `LLM_3_API_KEY` | – | fallback 3 API key |
 | `LLM_3_BASE_URL` | primary base | fallback 3 base URL |
 | `LLM_3_MODEL` | primary model | fallback 3 model id |
+| `LLM_4_API_KEY` | – | fallback 4 API key |
+| `LLM_4_BASE_URL` | primary base | fallback 4 base URL |
+| `LLM_4_MODEL` | primary model | fallback 4 model id |
 | `LLM_TEMPERATURE` | `0.2` | planner sampling temperature |
 | `LLM_TIMEOUT` | `120` | request timeout (seconds) |
 | `LLM_RETRIES` | `2` | retries per provider on 5xx/network errors |

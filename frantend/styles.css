@@ -313,6 +313,20 @@ button, textarea, input { font: inherit; color: inherit; }
 
 /* --------------------------------- steps --------------------------------- */
 
+.command-preview {
+  margin: 12px 0 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: #0b0f19;
+  border: 1px solid #1c2538;
+  color: #d4dcf0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .steps {
   margin-top: 14px;
   border: 1px solid var(--line);
@@ -366,10 +380,10 @@ button, textarea, input { font: inherit; color: inherit; }
   color: var(--faint);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 10.5px;
-  max-width: 58%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 62%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .step-tool {

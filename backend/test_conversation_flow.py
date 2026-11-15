@@ -1,6 +1,44 @@
 from app import agent, planner
 
 
+def test_planner_prompt_keeps_chat_and_terminal_contract():
+    assert '"tool":"respond"' in planner.SYSTEM
+    assert '"tool":"run_command"' in planner.SYSTEM
+    assert "curl" in planner.SYSTEM
+
+
+def test_conversation_history_beyond_16_messages_is_passed(monkeypatch):
+    monkeypatch.setattr(planner.llm, "is_configured", lambda: True)
+    captured = {}
+
+    def fake_chat(messages, **kwargs):
+        captured["messages"] = messages
+        return '{"tool":"respond","response":"ok"}'
+
+    monkeypatch.setattr(planner.llm, "chat", fake_chat)
+    conversation = []
+    for i in range(20):
+        conversation.append({"role": "user", "content": f"question {i}"})
+        conversation.append({"role": "assistant", "content": f"answer {i}"})
+
+    action = planner.next_action("latest", history=[], conversation=conversation)
+
+    assert action["tool"] == "respond"
+    serialized = "\n".join(message["content"] for message in captured["messages"])
+    for i in range(20):
+        assert f"question {i}" in serialized
+        assert f"answer {i}" in serialized
+
+
+def test_task_request_accepts_long_session_history():
+    from app.schemas import TaskRequest
+
+    conversation = [{"role": "user", "content": f"q{i}"} for i in range(20)]
+    request = TaskRequest(goal="follow up", conversation=conversation)
+
+    assert len(request.conversation) == 20
+
+
 def test_planner_accepts_direct_conversational_answer():
     action = planner.parse_action(
         '{"tool":"respond","response":"A Python list is mutable."}'

@@ -14,6 +14,10 @@ Set these in backend/.env to enable:
     LLM_3_BASE_URL=
     LLM_3_MODEL=
 
+    LLM_4_API_KEY=
+    LLM_4_BASE_URL=
+    LLM_4_MODEL=
+
     LLM_TIMEOUT=120
     LLM_RETRIES=2
 
@@ -27,7 +31,7 @@ import httpx
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
-MAX_FALLBACK_PROVIDERS = 3
+MAX_FALLBACK_PROVIDERS = 4
 
 
 def _env(name: str) -> str:
@@ -46,7 +50,7 @@ def providers() -> list[dict]:
     """Configured endpoints: primary first, then numbered fallbacks.
 
     Primary:   LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
-    Fallbacks: LLM_2_* ... LLM_3_* (LLM_1_* is accepted as an alias)
+    Fallbacks: LLM_2_* ... LLM_4_* (LLM_1_* is accepted as an alias)
 
     A provider is only used when its API key is set. Empty base/model values
     inherit the primary ones, so a fallback can be just a key + model.
@@ -121,7 +125,7 @@ def chat(messages: list[dict], temperature: float = 0.2, timeout: float | None =
     if not found:
         raise RuntimeError(
             "LLM not configured. Add LLM_API_KEY (and LLM_2_API_KEY / "
-            "LLM_3_API_KEY for fallbacks) to backend/.env"
+            "LLM_3_API_KEY / LLM_4_API_KEY for fallbacks) to backend/.env"
         )
 
     timeout = float(timeout or os.getenv("LLM_TIMEOUT", "120"))
