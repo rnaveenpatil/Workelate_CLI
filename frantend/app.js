@@ -6,7 +6,39 @@ const chat = $("chat");
 const empty = $("empty");
 const emptyTip = $("emptyTip");
 const messages = [];
-const conversation = [];
+const CONVERSATION_KEY = "workelate.conversation.v1";
+const conversation = loadConversation();
+
+function loadConversation() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CONVERSATION_KEY) || "[]");
+    return Array.isArray(saved)
+      ? saved.filter((m) => m && ["user", "assistant"].includes(m.role) &&
+          typeof m.content === "string").slice(-16)
+      : [];
+  } catch (_) { return []; }
+}
+
+function saveConversation() {
+  try { localStorage.setItem(CONVERSATION_KEY, JSON.stringify(conversation.slice(-16))); }
+  catch (_) { /* In-memory context remains available if storage is unavailable. */ }
+}
+
+function restoreConversation() {
+  if (!conversation.length) return;
+  hideEmpty();
+  for (const message of conversation) {
+    if (message.role === "user") addUserMessage(message.content);
+    else {
+      const wrap = el("div", "msg assistant");
+      wrap.append(el("div", "msg-role", "agent"));
+      wrap.append(el("div", "bubble", message.content));
+      chat.append(wrap);
+      messages.push(wrap);
+    }
+  }
+  scrollToBottom();
+}
 const form = $("form");
 const input = $("input");
 const sendBtn = $("send");
@@ -256,7 +288,7 @@ function addAssistantResult(data) {
   const bubble = el("div", "bubble");
   const meta = el("div", "meta");
   meta.append(badge(data.ok ? "completed" : "stopped", data.ok ? "ok" : "warn"));
-  meta.append(badge(data.mode === "llm" ? "llm planner" : "fallback"));
+  meta.append(badge(data.mode === "llm" ? "LLM" : "fallback"));
 
   const outcome = String(data.outcome || "(no outcome returned)");
   meta.append(copyButton(outcome));
@@ -354,7 +386,7 @@ async function sendGoal(goal) {
     addAssistantResult(data);
     conversation.push({ role: "user", content: text });
     conversation.push({ role: "assistant", content: String(data.outcome || "") });
-    if (conversation.length > 16) conversation.splice(0, conversation.length - 16);
+    if (conversation.length > 16) conversation.splice(0, conversation.length - 16);\n    saveConversation();
   } catch (err) {
     pending.remove();
     addError(err, text);
@@ -427,6 +459,7 @@ for (const chip of document.querySelectorAll(".chip")) {
 
 autosize();
 updateSend();
+restoreConversation();
 checkHealth();
 setInterval(checkHealth, 45000);
 input.focus();

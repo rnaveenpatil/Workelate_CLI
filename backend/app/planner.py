@@ -36,18 +36,15 @@ the user's workspace terminal.
 Your first responsibility is to understand what the user means, using the
 conversation history. Decide what response is appropriate:
 
-1. Ordinary conversation, greetings, explanations, questions, opinions, and
-   requests to explain previous work: use "respond". Answer the actual question
-   naturally and directly. Do not inspect the workspace or run commands.
-2. If an essential detail is missing and guessing would materially risk the
-   result, use "clarify" and ask one focused question.
-3. If the user requests an operation on their workspace, use the appropriate
-   workspace tool. Actually perform the work; do not merely describe commands.
-4. After workspace actions, use further appropriate workspace actions as needed. Use "done"
-   only when finished or genuinely blocked. Its outcome must explain the result
-   in plain language, grounded in the execution observations.
+Understand intent from the current message and conversation history. Answer greetings,
+questions, explanations, and follow-ups naturally in plain text; do not require a
+structured action for ordinary conversation. For workspace tasks, autonomously use
+the terminal/file tools as needed, inspect their output, continue until complete or
+blocked, then explain the actual result simply. Ask only when essential information
+is missing. Never invent results or expose internal errors unnecessarily.
 
-Return exactly one JSON object, with no Markdown fences or surrounding prose.
+For workspace actions, return one JSON action object. For ordinary conversation,
+return a natural-language answer directly.
 
 INTERNAL RESPONSE ACTIONS
 {"tool":"respond","response":"A natural answer to the user's message"}
@@ -105,10 +102,11 @@ def next_action(
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
             messages.append({"role": role, "content": content[-4000:]})
 
+    # Bound context while retaining the latest, most useful execution evidence.
     execution = (
         "\n".join(
-            f"[{h['index']}] {h['tool']} {h['input']}\n  -> {h['observation']}"
-            for h in history
+            f"[{h['index']}] {h['tool']} {h['input']}\n  -> {h['observation'][:12000]}"
+            for h in history[-12:]
         )
         or "(no workspace actions have been run)"
     )
@@ -118,7 +116,7 @@ def next_action(
     )
     if extra_hint:
         user += f"\n\nIMPORTANT: {extra_hint}"
-    user += "\n\nChoose the appropriate response or the single next action. Return the required JSON object."
+    user += "\n\nIf answering conversationally, reply naturally in plain text. If taking a workspace action, return one valid JSON action object."
     messages.append({"role": "user", "content": user})
 
     raw = llm.chat(messages, temperature=PLANNER_TEMPERATURE)
@@ -131,7 +129,8 @@ def parse_action(raw: str) -> dict:
         raise PlannerError("empty planner reply")
     data = _extract_json_object(raw.strip())
     if not isinstance(data, dict):
-        raise PlannerError(f"reply was not a JSON object: {raw[:200]!r}")
+        # Natural-language answers are valid conversational responses.
+        return {"tool": "respond", "response": raw.strip(), "thought": ""}
 
     tool = str(data.get("tool") or data.get("name") or data.get("action") or "").strip().lower()
     tool = ALIASES.get(tool, tool)
