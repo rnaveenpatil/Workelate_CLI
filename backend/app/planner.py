@@ -170,7 +170,10 @@ def parse_action(raw: str) -> dict:
     if not isinstance(data.get("thought"), str):
         data["thought"] = ""
     if tool == "done":
-        data["needs_clarification"] = bool(data.get("needs_clarification", False))
+        flag = data.get("needs_clarification", False)
+        if not isinstance(flag, bool):
+            raise PlannerError("done.needs_clarification must be a JSON boolean")
+        data["needs_clarification"] = flag
         if not isinstance(data.get("outcome"), str):
             data["outcome"] = ""
     _require(data, tool)
