@@ -230,7 +230,7 @@ function buildSteps(steps, open) {
   const summary = el(
     "summary",
     "",
-    `Execution log · ${steps.length} step${steps.length === 1 ? "" : "s"}`
+    `Terminal activity · ${steps.length} action${steps.length === 1 ? "" : "s"}`
   );
   details.append(summary);
 
@@ -245,10 +245,13 @@ function buildSteps(steps, open) {
     box.append(head);
 
     const body = inputBody(step.input);
-    if (body) box.append(el("pre", "step-input", body));
+    if (body) {
+      box.append(el("div", "step-obs-label", "executed command / action"));
+      box.append(el("pre", "step-input", body));
+    }
 
-    box.append(el("div", "step-obs-label", "observation"));
-    box.append(el("pre", "step-obs", step.observation || "(no output)"));
+    box.append(el("div", "step-obs-label", "terminal output"));
+    box.append(el("pre", "step-obs", step.observation || "(no terminal output returned)"));
     details.append(box);
   }
   return details;
@@ -292,8 +295,13 @@ function addAssistantResult(data) {
 
   // The expandable execution panel contains every action and its terminal
   // observation, matching the original frontend behavior.
-  if (Array.isArray(data.steps) && data.steps.length) {
-    bubble.append(buildSteps(data.steps, !data.ok));
+  const executionSteps = Array.isArray(data.steps)
+    ? data.steps.filter((step) => step && typeof step === "object")
+    : [];
+  if (executionSteps.length) {
+    // Keep the terminal trace expanded by default. Users can collapse it
+    // after reviewing the commands and their complete captured output.
+    bubble.append(buildSteps(executionSteps, true));
   }
 
   wrap.append(bubble);
