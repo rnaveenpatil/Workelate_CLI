@@ -1,25 +1,44 @@
-/* Workelate_CLI — tiny chat frontend for the FastAPI agent. */
+/* Workelate — minimal chat frontend for the FastAPI agent. */
 
 const $ = (id) => document.getElementById(id);
 
 const chat = $("chat");
 const empty = $("empty");
-const emptyTip = $("emptyTip");
-const messages = [];
-const conversation = [];
 const form = $("form");
 const input = $("input");
 const sendBtn = $("send");
 const newChatBtn = $("newChat");
-const statusEl = $("status");
-const statusText = $("statusText");
-const maxStepsEl = $("maxSteps");
-const apiBtn = $("apiBtn");
+const themeBtn = $("theme");
+const messages = [];
+const conversation = [];
 const SESSION_HISTORY_LIMIT = 1000;
+const DEFAULT_MAX_STEPS = 8;
 
 let busy = false;
 
+/* ------------------------------- theme ----------------------------------- */
+
+function currentTheme() {
+  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try {
+    localStorage.setItem("workelate.theme", theme);
+  } catch (_) {
+    /* storage may be unavailable */
+  }
+}
+
+themeBtn.addEventListener("click", () => {
+  applyTheme(currentTheme() === "dark" ? "light" : "dark");
+  input.focus();
+});
+
 /* ------------------------------- API base -------------------------------- */
+
+const DEFAULT_API_BASE = "https://workelate-cli-1.onrender.com";
 
 const API_BASE = (() => {
   const query = new URLSearchParams(location.search).get("api");
@@ -35,7 +54,7 @@ const API_BASE = (() => {
   if (/^https?:$/.test(location.protocol)) {
     if (location.port === "8000" || location.pathname.startsWith("/ui")) return "";
   }
-  return "http://localhost:8000";
+  return DEFAULT_API_BASE;
 })();
 
 function normalizeBase(url) {
@@ -95,12 +114,6 @@ function updateSend() {
   sendBtn.disabled = busy || !input.value.trim();
 }
 
-function setStatus(state, text) {
-  statusEl.classList.remove("online", "offline");
-  if (state) statusEl.classList.add(state);
-  statusText.textContent = text;
-}
-
 async function fetchJSON(path, options = {}, timeoutMs = 0) {
   const controller = new AbortController();
   const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
@@ -125,37 +138,6 @@ async function fetchJSON(path, options = {}, timeoutMs = 0) {
     return data;
   } finally {
     if (timer) clearTimeout(timer);
-  }
-}
-
-/* -------------------------------- health --------------------------------- */
-
-async function checkHealth() {
-  setStatus("", "checking…");
-  try {
-    const health = await fetchJSON("/health", {}, 6000);
-    const terminal = health.terminal || {};
-    const llm = health.llm || {};
-    const mode = terminal.mode || "local";
-    const terminalLabel = mode === "modal" ? "Modal" : "Local";
-    const bits = [terminalLabel];
-
-    if (mode !== "local") {
-      bits.push(terminal.configured ? "sandbox configured" : "sandbox not configured");
-    }
-    bits.push(llm.configured ? `LLM ${llm.model || "on"}` : "LLM off · agent disabled");
-
-    setStatus("online", bits.join(" · "));
-    statusEl.title = `Backend: ${apiLabel()}`;
-
-    emptyTip.textContent = llm.configured
-      ? `Connected to ${apiLabel()}. Ask in plain English or type a command.`
-      : `Connected to ${apiLabel()} · configure an LLM key to enable conversation and workspace actions. No action will run without it.`;
-  } catch (err) {
-    setStatus("offline", "backend offline");
-    statusEl.title = String((err && err.message) || err);
-    emptyTip.textContent =
-      `Cannot reach ${apiLabel()}. Start it with: cd backend && ./run.sh`;
   }
 }
 
@@ -215,24 +197,17 @@ function inputBody(input) {
   return JSON.stringify(input, null, 2);
 }
 
-function actionLabel(step) {
-  const input = step.input || {};
-  if (input.command) return `$ ${input.command}`;
-  if (input.path) return `${step.tool || "file"} ${input.path}`;
-  if (input.prefix) return `${step.tool || "list_files"} ${input.prefix}`;
-  return step.tool || "action";
-}
-
 function buildSteps(steps, open) {
   const details = el("details", "steps");
   if (open) details.open = true;
 
-  const summary = el(
-    "summary",
-    "",
-    `Execution log · ${steps.length} step${steps.length === 1 ? "" : "s"}`
+  details.append(
+    el(
+      "summary",
+      "",
+      `Execution log \u00b7 ${steps.length} step${steps.length === 1 ? "" : "s"}`
+    )
   );
-  details.append(summary);
 
   for (const step of steps) {
     const box = el("div", "step");
@@ -247,7 +222,7 @@ function buildSteps(steps, open) {
     const body = inputBody(step.input);
     if (body) box.append(el("pre", "step-input", body));
 
-    box.append(el("div", "step-obs-label", "observation"));
+    box.append(el("div", "step-obs-label", "output"));
     box.append(el("pre", "step-obs", step.observation || "(no output)"));
     details.append(box);
   }
@@ -277,23 +252,25 @@ function addAssistantResult(data) {
 
   const bubble = el("div", "bubble");
   const meta = el("div", "meta");
-  meta.append(badge(data.ok ? "completed" : "stopped", data.ok ? "ok" : "warn"));
-  meta.append(badge(data.mode === "llm" ? "llm planner" : "fallback"));
 
   const outcome = String(data.outcome || "(no outcome returned)");
+  if (!data.ok) meta.append(badge("stopped"));
   meta.append(copyButton(outcome));
   bubble.append(meta);
 
   bubble.append(el("div", "conclusion", outcome));
 
-  if (data.stopped_because && !["done", "answered_directly", "clarification_required"].includes(data.stopped_because)) {
+  if (
+    data.stopped_because &&
+    !["done", "answered_directly", "clarification_required"].includes(data.stopped_because)
+  ) {
     bubble.append(el("div", "stop-reason", `stopped: ${data.stopped_because}`));
   }
 
-  // The expandable execution panel contains every action and its terminal
-  // observation, matching the original frontend behavior.
   if (Array.isArray(data.steps) && data.steps.length) {
-    bubble.append(buildSteps(data.steps, !data.ok));
+    // Show the executed commands and their terminal output by default so the
+    // execution log is visible at the bottom of the message widget.
+    bubble.append(buildSteps(data.steps, true));
   }
 
   wrap.append(bubble);
@@ -307,26 +284,23 @@ function addError(err, goal) {
   wrap.append(el("div", "msg-role", "agent"));
 
   const bubble = el("div", "bubble error-box");
-  bubble.append(el("div", "err-title", "Could not reach the backend agent"));
-
+  bubble.append(el("div", "err-title", "Could not reach the agent"));
   bubble.append(el("div", "", errorText(err)));
 
   const help = el("div", "err-help");
-  help.append(document.createTextNode("Check that uvicorn is running on "));
-  help.append(el("code", "", apiLabel()));
-  help.append(document.createTextNode(" and that the Modal sandbox is reachable."));
+  help.append(document.createTextNode("Start the backend with "));
+  help.append(el("code", "", "cd backend && ./run.sh"));
+  help.append(document.createTextNode(` (expected at ${apiLabel()}).`));
   bubble.append(help);
 
-  if (goal) {
-    bubble.append(el("div", "err-help", `Goal was: ${goal}`));
-  }
+  if (goal) bubble.append(el("div", "err-help", `Goal was: ${goal}`));
 
   const retry = el("button", "copy", "Retry");
   retry.type = "button";
   retry.addEventListener("click", () => {
-    wrap.remove();
     const index = messages.indexOf(wrap);
     if (index >= 0) messages.splice(index, 1);
+    wrap.remove();
     sendGoal(goal);
   });
   bubble.append(retry);
@@ -356,8 +330,6 @@ async function sendGoal(goal) {
   newChatBtn.disabled = true;
 
   const pending = addPending();
-  const maxSteps = Math.max(1, Math.min(25, Number.parseInt(maxStepsEl.value, 10) || 8));
-  maxStepsEl.value = String(maxSteps);
 
   try {
     const data = await fetchJSON(
@@ -367,7 +339,7 @@ async function sendGoal(goal) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           goal: text,
-          max_steps: maxSteps,
+          max_steps: DEFAULT_MAX_STEPS,
           conversation: conversation.slice(-SESSION_HISTORY_LIMIT),
         }),
       },
@@ -410,11 +382,6 @@ input.addEventListener("keydown", (event) => {
   }
 });
 
-maxStepsEl.addEventListener("change", () => {
-  const value = Math.max(1, Math.min(25, Number.parseInt(maxStepsEl.value, 10) || 8));
-  maxStepsEl.value = String(value);
-});
-
 newChatBtn.addEventListener("click", () => {
   if (busy) return;
   showEmpty();
@@ -424,33 +391,6 @@ newChatBtn.addEventListener("click", () => {
   input.focus();
 });
 
-statusEl.addEventListener("click", checkHealth);
-
-apiBtn.textContent = `API: ${apiLabel()}`;
-apiBtn.addEventListener("click", () => {
-  const next = window.prompt("Backend API base URL", apiLabel());
-  if (next === null) return;
-  const value = normalizeBase(next);
-  try {
-    if (value) localStorage.setItem("workelate.api", value);
-    else localStorage.removeItem("workelate.api");
-  } catch (_) {
-    /* ignore storage failures */
-  }
-  location.reload();
-});
-
-for (const chip of document.querySelectorAll(".chip")) {
-  chip.addEventListener("click", () => {
-    input.value = chip.dataset.prompt || chip.textContent || "";
-    autosize();
-    updateSend();
-    input.focus();
-  });
-}
-
 autosize();
 updateSend();
-checkHealth();
-setInterval(checkHealth, 45000);
 input.focus();

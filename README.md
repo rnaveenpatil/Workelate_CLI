@@ -44,9 +44,9 @@ The chat UI is served by the same backend at **http://localhost:8000/ui/**.
 It sends each message to `POST /task`, shows a concise user-facing summary, and keeps
 the actual commands, inputs, and raw terminal observations in the expandable execution log.
 The final summary is generated from the execution trace; if synthesis fails, a deterministic
-report is used instead. It can also be opened directly from
-`frantend/index.html`; in that case it calls `http://localhost:8000` by default.
-Override the API URL with `?api=http://127.0.0.1:8000` or the **API** button.
+report is used instead. It can also be opened directly from `frantend/index.html`; in that
+case it calls `https://workelate-cli-1.onrender.com` by default. Override the API URL with
+`?api=http://127.0.0.1:8000` or by setting `workelate.api` in localStorage.
 
 ## Connect a Modal sandbox
 
@@ -84,6 +84,28 @@ when it terminates. `MODAL_IMAGE` also accepts the dashboard URL
 `https://modal.com/images/rnpvip685/main`; the workspace segment is dropped.
 Modal sandboxes have outbound internet access, so use `curl`/`wget` through
 `run_command` for web access.
+
+Up to four Modal accounts can be configured. The next account is used
+automatically when one reaches its usage limit, loses auth, cannot
+start/execute a sandbox, or its first command fails. After an account runs a
+command successfully, normal command failures no longer trigger a switch so
+the agent can inspect the real error:
+
+```
+MODAL_2_TOKEN_ID=<token id>
+MODAL_2_TOKEN_SECRET=<token secret>
+# or: MODAL_2_PROFILE=<profile in ~/.modal.toml>
+MODAL_3_TOKEN_ID=<token id>
+MODAL_3_TOKEN_SECRET=<token secret>
+MODAL_4_TOKEN_ID=<token id>
+MODAL_4_TOKEN_SECRET=<token secret>
+```
+
+All accounts share the global `MODAL_ENVIRONMENT`, `MODAL_IMAGE`,
+`MODAL_APP_NAME`, and `MODAL_WORKDIR`; only the credentials change. Fallback
+accounts use their own sandbox, so workspace files do not carry over between
+accounts. If a fallback account has no named image, the backend uses a
+`debian_slim` image (configurable with `MODAL_FALLBACK_IMAGE`).
 
 With `CLI_MODE=local`, commands run in `WORKSPACE_DIR` on the same machine
 instead — the agent still works offline.
