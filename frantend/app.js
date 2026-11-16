@@ -296,7 +296,9 @@ function addAssistantResult(data) {
   // The expandable execution panel contains every action and its terminal
   // observation, matching the original frontend behavior.
   const executionSteps = Array.isArray(data.steps)
-    ? data.steps.filter((step) => step && typeof step === "object")
+    ? data.steps.filter(
+        (step) => step && typeof step === "object" && step.tool !== "done"
+      )
     : [];
   if (executionSteps.length) {
     // Keep the terminal trace expanded by default. Users can collapse it
