@@ -1,140 +1,150 @@
-# Workelate_CLI
+<p align="center">
+  <img src="docs/ui.png" alt="Workelate_CLI chat interface" width="900">
+</p>
 
-Minimal agent: **goal in → shell/file actions on the workspace → outcome out.**
-The only tool is the terminal — web access is done with `curl`/`wget` through it.
+<h1 align="center">Workelate_CLI</h1>
 
-```
-frantend/            static UI (optional)
-backend/
-  app/main.py        FastAPI entrypoint
-  app/routes.py      /health  /files  /task
-  app/schemas.py     request/response models
-  app/agent.py       the loop plus final user-facing summarisation
-  app/planner.py     picks the next action using the configured LLM
-  app/executor.py    tools: run_command, read_file, write_file, list_files
-  app/cli.py         the terminal: local subprocess OR Modal sandbox
-  app/inspector.py   shrinks tool output for the next step
-  app/llm.py         OpenAI-compatible client — API KEY LEFT EMPTY ON PURPOSE
-```
+<p align="center">
+  <strong>Tell it what you want. It does it on a real remote Linux terminal — and shows you exactly what it ran.</strong>
+</p>
 
-## Run
+<p align="center">
+  <a href="https://workelate-cli.onrender.com/">
+    <img src="https://img.shields.io/badge/Try_it_live-workelate--cli.onrender.com-2f6fed?style=for-the-badge" alt="Try Workelate_CLI live">
+  </a>
+</p>
 
-```bash
-cd backend
-python3 -m venv .venv                      # once
-.venv/bin/pip install -r requirements.txt  # once
-cp .env.example .env
-./run.sh                                   # 0.0.0.0:8000 with reload
-```
+## What is Workelate_CLI?
 
-`run.sh` uses `.venv/bin/uvicorn app.main:app`. You can also run
-`.venv/bin/uvicorn main:app` from `backend/app`; the entrypoint inserts the
-backend root on `sys.path` so package-relative imports still work.
+Workelate_CLI is a chat page with an AI agent that works on a **real Linux terminal in the cloud**.
 
-```bash
-curl localhost:8000/health
-curl -X POST localhost:8000/task -H 'content-type: application/json' \
-     -d '{"goal":"ls && git status","max_steps":3}'
-```
+You describe a task in normal English. The agent works out the commands, runs them on a remote Linux machine, checks the result, and replies with a short summary. Under the summary, you can see **every command it ran and the exact output**.
 
-## Frontend
+It has **one tool only**: the remote terminal. That is the whole idea. It can do anything a Linux terminal can do, and it does not pretend to do anything else.
 
-The chat UI is served by the same backend at **http://localhost:8000/ui/**.
+## How it works
 
-It sends each message to `POST /task`, shows a concise user-facing summary, and keeps
-the actual commands, inputs, and raw terminal observations in the expandable execution log.
-The final summary is generated from the execution trace; if synthesis fails, a deterministic
-report is used instead. It can also be opened directly from `frantend/index.html`; in that
-case it calls `https://workelate-cli-1.onrender.com` by default. Override the API URL with
-`?api=http://127.0.0.1:8000` or by setting `workelate.api` in localStorage.
-
-## Connect a Modal sandbox
-
-The SDK is already in `requirements.txt`. Authenticate once per machine:
-
-```bash
-cd backend
-.venv/bin/modal token set --profile=rnpvip685
-.venv/bin/modal profile activate rnpvip685
+```mermaid
+flowchart TD
+    A["You type a task"] --> B["Chat page on Render"]
+    B --> C["Agent backend on Render"]
+    C --> D["AI model plans the next step"]
+    D --> E["Run the command on the remote Linux terminal from Modal.com"]
+    E --> F["Read the output"]
+    F --> G{"Task finished?"}
+    G -->|"Not yet"| D
+    G -->|"Yes"| H["Write a short, plain-English summary"]
+    H --> I["Show the summary and the command log"]
+    I --> B
+    B --> J["You see the answer"]
 ```
 
-Publish the named image (for example `main`) in the `rnpvip685` workspace. If
-you have a Dockerfile:
+### What happens when you press Send
 
-```bash
-.venv/bin/modal image build -t main . -e main
+1. You type a task and press **Send** (or **Enter**).
+2. The chat page sends the task to the agent backend.
+3. The backend asks the AI model what to do next.
+4. The AI model chooses a command.
+5. The agent runs that command on the remote Linux terminal at Modal.com.
+6. The agent reads the output and repeats until the task is done.
+7. The agent writes a short summary in normal language.
+8. The chat page shows the summary and opens the **execution log** with every command and its output.
+
+## The buttons
+
+| What you see | What it does |
+| --- | --- |
+| **+** | Starts a new chat and clears the screen. |
+| **🌙 / ☀️** | Switches between dark and light mode. |
+| **Message box** | Describe a task, or type a command yourself. |
+| **↑** or **Enter** | Sends your message. **Shift + Enter** adds a new line instead of sending. |
+| **Execution log** | Shows every step, command, and output. It is open by default; click the title to fold it. |
+| **Copy** | Copies the agent's summary. |
+| **Retry** | Appears only if the backend cannot be reached. It tries the same task again. |
+
+```mermaid
+flowchart LR
+    A["Open the site"] --> B["Type your task"]
+    B --> C["Press Send or Enter"]
+    C --> D["Agent works on the remote terminal"]
+    D --> E["Read the summary"]
+    E --> F["Open the execution log"]
+    F --> G{"Another task?"}
+    G -->|"Yes"| B
+    G -->|"No"| H["Press + to start fresh"]
 ```
 
-Then set in `backend/.env`:
+## Where everything runs
 
-```
-CLI_MODE=modal
-MODAL_PROFILE=rnpvip685
-MODAL_ENVIRONMENT=main
-MODAL_IMAGE=main
-MODAL_APP_NAME=workelate-cli
-MODAL_TIMEOUT=86400
-MODAL_IDLE_TIMEOUT=
-MODAL_WORKDIR=
-```
-
-Every `run_command`, `read_file`, `write_file`, and `list_files` then runs inside
-that Modal sandbox. The sandbox is cached per process and recreated automatically
-when it terminates. `MODAL_IMAGE` also accepts the dashboard URL
-`https://modal.com/images/rnpvip685/main`; the workspace segment is dropped.
-Modal sandboxes have outbound internet access, so use `curl`/`wget` through
-`run_command` for web access.
-
-Up to four Modal accounts can be configured. The next account is used
-automatically when one reaches its usage limit, loses auth, cannot
-start/execute a sandbox, or its first command fails. After an account runs a
-command successfully, normal command failures no longer trigger a switch so
-the agent can inspect the real error:
-
-```
-MODAL_2_TOKEN_ID=<token id>
-MODAL_2_TOKEN_SECRET=<token secret>
-# or: MODAL_2_PROFILE=<profile in ~/.modal.toml>
-MODAL_3_TOKEN_ID=<token id>
-MODAL_3_TOKEN_SECRET=<token secret>
-MODAL_4_TOKEN_ID=<token id>
-MODAL_4_TOKEN_SECRET=<token secret>
+```mermaid
+flowchart LR
+    subgraph YourSide["Your side"]
+        U["Your browser"]
+    end
+    subgraph Render["Render"]
+        FE["Chat page<br/>(frontend)"]
+        BE["Agent backend<br/>(backend)"]
+    end
+    subgraph Modal["Modal.com"]
+        T["Remote Linux terminal"]
+    end
+    U <-->|"task and answer"| FE
+    FE <-->|"task and result"| BE
+    BE <-->|"commands and output"| T
 ```
 
-All accounts share the global `MODAL_ENVIRONMENT`, `MODAL_IMAGE`,
-`MODAL_APP_NAME`, and `MODAL_WORKDIR`; only the credentials change. Fallback
-accounts use their own sandbox, so workspace files do not carry over between
-accounts. If a fallback account has no named image, the backend uses a
-`debian_slim` image (configurable with `MODAL_FALLBACK_IMAGE`).
+- **Frontend:** the chat page you see. It is deployed on Render.
+- **Backend:** the agent that thinks and runs the work. It is also deployed on Render.
+- **Terminal:** a separate Linux machine in the cloud, provided by Modal.com. The backend sends commands to it and gets the output back.
+- **Your computer:** never used for the work. Everything happens in the cloud.
 
-With `CLI_MODE=local`, commands run in `WORKSPACE_DIR` on the same machine
-instead — the agent still works offline.
+The chat page and the backend are deployed separately on Render, but they work together. The chat page is the friendly front door; the backend is the part that actually does the task.
 
-## LLM
+## What it can and cannot do
 
-Configure 1–4 providers in `backend/.env` (any OpenAI-compatible endpoints).
-The primary is tried first, then the numbered fallbacks:
+| It can | It cannot |
+| --- | --- |
+| Create, read, edit, move, and delete files in the remote workspace | Generate images, video, or audio |
+| Run Linux programs, scripts, and tests | Control a browser or a desktop screen |
+| Install packages and tools | Open files on your personal computer |
+| Use git to manage a project | Use any tool other than the remote terminal |
+| Download files and call web services through the terminal | — |
 
+If a task cannot be done with a Linux terminal, the agent does not guess or fake it. It replies:
+
+> I can not do that because I have only one tool, the remote terminal from modal.com.
+
+## Example
+
+**You:** Create a folder called `demo`, add a file `hello.txt` with "hello from Workelate", and show me the file.
+
+**Agent:** Done. I created the folder and the file, then printed the file to confirm its contents.
+
+**Execution log · 2 steps**
+
+```text
+#1  run_command   $ mkdir -p demo && printf 'hello from Workelate\n' > demo/hello.txt
+#2  run_command   $ cat demo/hello.txt
+
+output
+hello from Workelate
 ```
-# Primary
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_API_KEY=<your key>
-LLM_MODEL=gpt-4o-mini
 
-# Fallbacks (empty BASE_URL/MODEL reuse the primary ones)
-LLM_2_API_KEY=<key>
-LLM_2_BASE_URL=
-LLM_2_MODEL=
-LLM_3_API_KEY=<key>
-LLM_3_BASE_URL=
-LLM_3_MODEL=
-LLM_4_API_KEY=<key>
-LLM_4_BASE_URL=
-LLM_4_MODEL=
-```
+Every task works the same way: a short answer first, the real commands underneath.
 
-If a provider fails after its retries (5xx/network) or returns a 4xx, the agent
-tries the next one. An LLM key is required for natural-language requests. Without one, the agent refuses
-to execute the request rather than treating an English sentence as a shell command.
-This prevents accidental or confusing terminal execution. Optional: `LLM_TEMPERATURE=0.2`,
-`LLM_TIMEOUT=120`, `LLM_RETRIES=2`.
+## Why use it?
+
+- **No setup.** It runs in your browser. Nothing is installed on your computer.
+- **Safe.** The work happens on a separate cloud machine, not on your machine.
+- **Transparent.** You always see the commands and the real output.
+- **Honest.** It has one tool, so it tells you when a task is outside what it can do.
+
+## Try it now
+
+### 👉 [Open Workelate_CLI](https://workelate-cli.onrender.com/)
+
+Type a task, press **Send**, and watch the agent work.
+
+---
+
+Want to run it yourself? See [backend/README.md](backend/README.md) for developer setup.
