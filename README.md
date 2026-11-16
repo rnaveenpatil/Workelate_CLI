@@ -16,7 +16,7 @@
 
 ## What is Workelate_CLI?
 
-Workelate_CLI is a chat page with an AI agent that works on a **real Linux terminal in the cloud**.
+Workelate_CLI is a chat page with an AI agent that works on a **real Linux terminal in the cloud**. It was built for the **CLI-Driven AI Chat Execution for Complex Tasks** challenge.
 
 You describe a task in normal English. The agent works out the commands, runs them on a remote Linux machine, checks the result, and replies with a short summary. Under the summary, you can see **every command it ran and the exact output**.
 
@@ -49,6 +49,80 @@ flowchart TD
 6. The agent reads the output and repeats until the task is done.
 7. The agent writes a short summary in normal language.
 8. The chat page shows the summary and opens the **execution log** with every command and its output.
+
+## Built for the CLI-Driven AI Chat Execution challenge
+
+The brief asks for a chat app that understands a natural-language request, runs a real CLI task from the backend, captures the result, and returns a clear answer with structured JSON.
+
+Every part of the brief maps to a real part of the app:
+
+| The brief asks for | What Workelate_CLI does |
+| --- | --- |
+| A chat interface for a task and input like a URL | The chat page accepts the task and URL in one message. |
+| An AI layer that understands the request | The AI model reads the message and plans the next action. |
+| Backend orchestration that invokes a CLI tool | The backend chooses the remote Linux terminal and runs the command there. |
+| A real execution workflow | The terminal downloads the page, runs a parser when needed, and captures the result. |
+| Output capture | The exit status, standard output, and error output are recorded for every step. |
+| A clear response with JSON | The chat shows a plain-English summary, the JSON, and the full execution log. |
+| Handling failures | Bad URLs, unreachable sites, timeouts, and failed commands are reported with the real error. |
+
+### Mandatory demo: crawl a website
+
+**The ask:**
+
+> Crawl https://example.com, extract the important information, give me a summary, and return the extracted data in JSON format.
+
+```mermaid
+flowchart LR
+    A["You paste the URL and task"] --> B["Agent plans the crawl"]
+    B --> C["Remote terminal downloads the page"]
+    C --> D["Extract the important information"]
+    D --> E["Build the JSON"]
+    E --> F["Agent writes the summary"]
+    F --> G["Chat shows the summary, JSON, and command log"]
+```
+
+![A real crawl run in Workelate_CLI](docs/example-crawl.png)
+
+This is a real run from the live app. The terminal fetched the page; the answer was not written from memory.
+
+**Summary from the chat:** The page is the standard placeholder for the Example Domain. It says the domain is intended for use in documentation examples, warns that it is not a service, and should not be relied on for testing or monitoring.
+
+**Extracted JSON:**
+
+```json
+{
+  "url": "https://example.com",
+  "title": "Example Domain",
+  "content": "This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.",
+  "summary": "The page is a placeholder for the Example Domain, intended for use in documentation examples without permission. It explicitly states that it is not a service and should not be used for testing or monitoring."
+}
+```
+
+**Execution log:** The chat shows the exact command and its real output:
+
+```text
+#1  run_command   $ curl -s https://example.com
+    status=OK  exit_code=0
+    stdout: <the real HTML of the page>
+
+#2  done
+```
+
+The raw page content is captured from the terminal. If the page cannot be reached or the command fails, the chat shows the failure instead of inventing a result.
+
+### When something goes wrong
+
+| Situation | What the chat shows |
+| --- | --- |
+| The URL is invalid or missing | The agent explains the problem and asks for a valid URL. It does not fake a crawl. |
+| The website is down or too slow | The terminal reports the timeout or connection error; the agent tells you what failed. |
+| A command fails | The answer is marked as stopped, and the real error output is shown. |
+| The page is not HTML | The terminal can show the raw response or read JSON directly. |
+| The page is very large | The agent trims the output for the next step and keeps the summary focused. |
+| The task needs a tool that is not a terminal | The agent refuses instead of pretending. |
+
+Use it only on public pages you are allowed to access. The demo uses `example.com`. The agent does not bypass logins, paywalls, or access controls, and you should respect each site's terms and crawl rules.
 
 ## The buttons
 
