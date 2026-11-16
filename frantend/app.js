@@ -38,7 +38,7 @@ themeBtn.addEventListener("click", () => {
 
 /* ------------------------------- API base -------------------------------- */
 
-const DEFAULT_API_BASE = "https://workelate-cli-1.onrender.com";
+const DEFAULT_API_BASE = "https://workelate-cli-backend.onrender.com";
 
 const API_BASE = (() => {
   const query = new URLSearchParams(location.search).get("api");
