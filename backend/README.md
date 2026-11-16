@@ -84,6 +84,34 @@ terminates. `MODAL_IMAGE` also accepts the dashboard URL
 sandboxes have outbound internet access, so web access goes through
 `curl`/`wget` in `run_command`.
 
+### Modal account fallbacks
+
+Add up to four accounts. The next account is tried automatically when the
+active account hits a usage/rate limit, loses auth, its sandbox cannot be
+created/executed, or its first command fails (a broken terminal). Once an
+account has run a command successfully, ordinary command failures stay on that
+account so the agent can inspect them:
+
+```
+MODAL_2_TOKEN_ID=
+MODAL_2_TOKEN_SECRET=
+# or a profile from ~/.modal.toml
+MODAL_2_PROFILE=
+MODAL_3_TOKEN_ID=
+MODAL_3_TOKEN_SECRET=
+MODAL_4_TOKEN_ID=
+MODAL_4_TOKEN_SECRET=
+```
+
+All accounts share the global `MODAL_ENVIRONMENT`, `MODAL_IMAGE`,
+`MODAL_APP_NAME`, and `MODAL_WORKDIR`; only the credentials change. `/health`
+reports the configured accounts and which one is active.
+
+If a fallback account has no named image (`main`), the backend creates a
+`debian_slim` image with git/curl/wget/python and uses that account's default
+workdir. Override it with `MODAL_FALLBACK_IMAGE=debian_slim` or a registry image
+such as `python:3.12-slim`.
+
 With `CLI_MODE=local`, commands run in `WORKSPACE_DIR` on the same machine — the
 agent still works.
 
@@ -137,6 +165,11 @@ and model without exposing keys.
 | `MODAL_TIMEOUT` | `86400` | sandbox lifetime (seconds) |
 | `MODAL_IDLE_TIMEOUT` | – | shutdown after this many idle seconds |
 | `MODAL_WORKDIR` | image default | cwd for commands and file tools |
+| `MODAL_FALLBACK_IMAGE` | `debian_slim` | image for accounts missing the named image |
+| `MODAL_2_TOKEN_ID` | – | fallback 2 Modal token id |
+| `MODAL_2_TOKEN_SECRET` | – | fallback 2 Modal token secret |
+| `MODAL_2_PROFILE` | – | fallback 2 profile name (alternative to tokens) |
+| `MODAL_3_*`, `MODAL_4_*` | – | additional Modal accounts (same keys) |
 | `WORKSPACE_DIR` | cwd | command cwd / file sandbox root |
 | `AGENT_MAX_STEPS` | `6` | loop cap |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | primary API base |

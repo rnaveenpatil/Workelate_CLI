@@ -247,6 +247,15 @@ def test_agent_toolset_is_terminal_only():
         assert name not in executor.TOOLS
 
 
+def test_planner_prompt_restricts_agent_to_remote_terminal():
+    prompt = planner.SYSTEM.lower()
+    assert "exactly one capability" in prompt
+    assert "remote linux terminal" in prompt
+    assert "only one tool" in prompt
+    assert "modal.com" in prompt
+    assert "cannot do anything a shell command in that sandbox cannot do" in prompt
+
+
 def test_parse_rejects_empty_and_garbage():
     for bad in ("", "   ", "no json here", "[1,2,3]"):
         with pytest.raises(planner.PlannerError):
@@ -443,7 +452,7 @@ def test_modal_run_dispatches_to_sandbox(monkeypatch):
     sandbox = _FakeSandbox()
     monkeypatch.setenv("CLI_MODE", "modal")
     monkeypatch.setenv("MODAL_WORKDIR", "/workspace")
-    monkeypatch.setattr(cli, "_modal_sandbox", lambda: sandbox)
+    monkeypatch.setattr(cli, "_modal_sandbox", lambda account=None: sandbox)
 
     result = cli.run("echo hi")
     assert result["ok"] is True
@@ -457,14 +466,217 @@ def test_modal_recreates_terminated_sandbox(monkeypatch):
     new = _FakeSandbox()
     monkeypatch.setenv("CLI_MODE", "modal")
     monkeypatch.setenv("MODAL_IMAGE", "test-image")
-    monkeypatch.setattr(cli, "_create_modal_sandbox", lambda: new)
+    monkeypatch.setattr(cli, "_create_modal_sandbox", lambda account=None: new)
 
     cli._reset_modal_cache()
-    cli._MODAL_CACHE["sandbox"] = old
-    cli._MODAL_CACHE["sandbox_signature"] = cli._modal_signature()
+    account = cli._active_account()
+    state = cli._account_state(account)
+    state["sandbox"] = old
+    state["signature"] = cli._modal_signature(account)
 
     assert cli._modal_sandbox() is new
-    assert cli._MODAL_CACHE["sandbox"] is new
+    assert cli._account_state(account)["sandbox"] is new
+
+
+def test_modal_accounts_include_fallbacks(monkeypatch):
+    monkeypatch.setenv("MODAL_TOKEN_ID", "ak-1")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "as-1")
+    for index, suffix in ((2, "two"), (3, "three"), (4, "four")):
+        monkeypatch.setenv(f"MODAL_{index}_TOKEN_ID", f"ak-{suffix}")
+        monkeypatch.setenv(f"MODAL_{index}_TOKEN_SECRET", f"as-{suffix}")
+
+    accounts = cli._modal_accounts()
+    assert [a["name"] for a in accounts] == [
+        "primary",
+        "MODAL_2",
+        "MODAL_3",
+        "MODAL_4",
+    ]
+    assert accounts[1]["token_id"] == "ak-two"
+
+
+def test_modal_falls_back_to_next_account(monkeypatch):
+    monkeypatch.setenv("CLI_MODE", "modal")
+    monkeypatch.setenv("MODAL_TOKEN_ID", "ak-1")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "as-1")
+    monkeypatch.setenv("MODAL_2_TOKEN_ID", "ak-2")
+    monkeypatch.setenv("MODAL_2_TOKEN_SECRET", "as-2")
+    monkeypatch.setenv("MODAL_WORKDIR", "/workspace")
+
+    sandbox = _FakeSandbox()
+    tried: list[str] = []
+
+    def fake_sandbox(account=None):
+        tried.append(account["name"])
+        if account["name"] == "primary":
+            raise RuntimeError("workspace usage limit reached")
+        return sandbox
+
+    monkeypatch.setattr(cli, "_modal_sandbox", fake_sandbox)
+    cli._reset_modal_cache()
+
+    result = cli.run("echo hi")
+    assert result["ok"] is True
+    assert result["stdout"].strip() == "modal-ok"
+    assert tried == ["primary", "MODAL_2"]
+    assert cli._MODAL_CACHE["active_account"] == "MODAL_2"
+
+
+def test_modal_falls_back_when_command_reports_account_limit(monkeypatch):
+    monkeypatch.setenv("CLI_MODE", "modal")
+    monkeypatch.setenv("MODAL_TOKEN_ID", "ak-1")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "as-1")
+    monkeypatch.setenv("MODAL_2_TOKEN_ID", "ak-2")
+    monkeypatch.setenv("MODAL_2_TOKEN_SECRET", "as-2")
+    monkeypatch.setenv("MODAL_WORKDIR", "/workspace")
+
+    class _LimitSandbox(_FakeSandbox):
+        def exec(self, *args, timeout=None, workdir=None, **kwargs):
+            self.calls.append((args, timeout, workdir))
+            return _FakeProcess(
+                stderr="workspace usage limit reached", exit_code=1
+            )
+
+    sandboxes = {"primary": _LimitSandbox(), "MODAL_2": _FakeSandbox()}
+
+    def fake_sandbox(account=None):
+        return sandboxes[account["name"]]
+
+    monkeypatch.setattr(cli, "_modal_sandbox", fake_sandbox)
+    cli._reset_modal_cache()
+
+    result = cli.run("echo hi")
+    assert result["ok"] is True
+    assert result["stdout"].strip() == "modal-ok"
+    assert sandboxes["primary"].calls  # tried primary first
+    assert sandboxes["MODAL_2"].calls  # then the fallback account
+    assert cli._MODAL_CACHE["active_account"] == "MODAL_2"
+
+
+def test_modal_falls_back_on_first_failed_command(monkeypatch):
+    monkeypatch.setenv("CLI_MODE", "modal")
+    monkeypatch.setenv("MODAL_TOKEN_ID", "ak-1")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "as-1")
+    monkeypatch.setenv("MODAL_2_TOKEN_ID", "ak-2")
+    monkeypatch.setenv("MODAL_2_TOKEN_SECRET", "as-2")
+    monkeypatch.setenv("MODAL_WORKDIR", "/workspace")
+
+    class _BrokenSandbox(_FakeSandbox):
+        def exec(self, *args, timeout=None, workdir=None, **kwargs):
+            self.calls.append((args, timeout, workdir))
+            return _FakeProcess(stderr="boom", exit_code=1)
+
+    sandboxes = {"primary": _BrokenSandbox(), "MODAL_2": _FakeSandbox()}
+
+    def fake_sandbox(account=None):
+        return sandboxes[account["name"]]
+
+    monkeypatch.setattr(cli, "_modal_sandbox", fake_sandbox)
+    cli._reset_modal_cache()
+
+    result = cli.run("echo hi")
+    assert result["ok"] is True
+    assert result["stdout"].strip() == "modal-ok"
+    assert sandboxes["primary"].calls
+    assert sandboxes["MODAL_2"].calls
+    assert cli._MODAL_CACHE["active_account"] == "MODAL_2"
+
+
+def test_modal_keeps_account_after_a_successful_command(monkeypatch):
+    monkeypatch.setenv("CLI_MODE", "modal")
+    monkeypatch.setenv("MODAL_TOKEN_ID", "ak-1")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "as-1")
+    monkeypatch.setenv("MODAL_2_TOKEN_ID", "ak-2")
+    monkeypatch.setenv("MODAL_2_TOKEN_SECRET", "as-2")
+    monkeypatch.setenv("MODAL_WORKDIR", "/workspace")
+
+    class _SometimesFails(_FakeSandbox):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def exec(self, *args, timeout=None, workdir=None, **kwargs):
+            self.calls.append((args, timeout, workdir))
+            self.n += 1
+            if self.n == 2:
+                return _FakeProcess(stderr="command failed", exit_code=1)
+            return _FakeProcess(stdout="ok\n")
+
+    primary = _SometimesFails()
+    fallback = _FakeSandbox()
+
+    def fake_sandbox(account=None):
+        return primary if account["name"] == "primary" else fallback
+
+    monkeypatch.setattr(cli, "_modal_sandbox", fake_sandbox)
+    cli._reset_modal_cache()
+
+    assert cli.run("echo one")["ok"] is True
+    second = cli.run("false")
+    assert second["ok"] is False
+    assert second["stderr"] == "command failed"
+    assert fallback.calls == []
+
+
+def test_modal_reports_all_account_failures(monkeypatch):
+    monkeypatch.setenv("CLI_MODE", "modal")
+    monkeypatch.setenv("MODAL_TOKEN_ID", "ak-1")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "as-1")
+    monkeypatch.setenv("MODAL_2_TOKEN_ID", "ak-2")
+    monkeypatch.setenv("MODAL_2_TOKEN_SECRET", "as-2")
+
+    def fake_sandbox(account=None):
+        raise RuntimeError(f"{account['name']} limit reached")
+
+    monkeypatch.setattr(cli, "_modal_sandbox", fake_sandbox)
+    cli._reset_modal_cache()
+
+    result = cli.run("echo hi")
+    assert result["ok"] is False
+    assert "all accounts failed" in result["stderr"]
+    assert "primary" in result["stderr"]
+    assert "MODAL_2" in result["stderr"]
+
+
+def test_modal_missing_named_image_detection():
+    assert cli._missing_named_image(
+        RuntimeError("Image 'main' not found in environment 'main'")
+    )
+    assert not cli._missing_named_image(RuntimeError("workspace spend limit reached"))
+
+
+def test_modal_create_sandbox_uses_default_image_when_named_is_missing(monkeypatch):
+    import modal
+
+    calls: list[tuple] = []
+    sentinel = object()
+
+    monkeypatch.setattr(cli, "_modal_client", lambda account: None)
+    monkeypatch.setattr(modal.Image, "from_name", lambda name, **kw: "named-image")
+    monkeypatch.setattr(cli, "_fallback_image", lambda: "default-image")
+
+    def fake_launch(account, image, client, image_kind="named"):
+        calls.append((image, image_kind))
+        if image_kind == "named":
+            raise RuntimeError("Image 'main' not found in environment 'main'")
+        return sentinel
+
+    monkeypatch.setattr(cli, "_launch_modal_sandbox", fake_launch)
+    assert cli._create_modal_sandbox() is sentinel
+    assert calls == [("named-image", "named"), ("default-image", "fallback")]
+
+
+def test_modal_fallback_image_ignores_nonexistent_workdir(monkeypatch):
+    monkeypatch.setenv("MODAL_WORKDIR", "/workspace")
+    account = {"name": "MODAL_3", "workdir": "/workspace"}
+    cli._reset_modal_cache()
+    state = cli._account_state(account)
+    state["image_kind"] = "fallback"
+    state["default_workdir"] = "/root"
+    assert cli._modal_workdir(account) == "/root"
+
+    state["image_kind"] = "named"
+    assert cli._modal_workdir(account) == "/workspace"
 
 
 def test_modal_image_reference_accepts_dashboard_url(monkeypatch):
